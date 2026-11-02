@@ -86,6 +86,17 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
+from .jduck_velocity_env_cfg import JduckRlCfg, make_jduck_velocity_env_cfg
+
+# jduck — the user's UBT-12HC biped, on the microduck velocity recipe.
+register_mjlab_task(
+    task_id="Mjlab-Velocity-Flat-JDuck",
+    env_cfg=make_jduck_velocity_env_cfg(),
+    play_env_cfg=make_jduck_velocity_env_cfg(play=True),
+    rl_cfg=JduckRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
 register_mjlab_task(
     task_id="Mjlab-Velocity-Rough-MicroDuck",
     env_cfg=make_microduck_velocity_env_cfg(rough=True),

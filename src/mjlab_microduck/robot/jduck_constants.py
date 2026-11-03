@@ -94,7 +94,10 @@ JDUCK_COLLISION = CollisionCfg(
 )
 
 _SERVO_JOINTS = (r"^(?!passive_|trunk_base_freejoint$).*",)
-JDUCK_EFFORT_LIMIT = 0.8     # URDF effort (friend-confirmed)
+# Stall torque. URDF/friend: 0.8 N·m. Official UBT-12HC spec (UBTECH Company
+# Introduction p.16): 8 kg·cm @6.5 V, 12 kg·cm @8.5 V → ~0.96 N·m at the rated
+# 7.4 V. JDUCK_TORQUE=<N·m> overrides it.
+JDUCK_EFFORT_LIMIT = float(os.environ.get("JDUCK_TORQUE", "0.8"))
 # URDF velocity (friend-confirmed). JDUCK_NOLOAD=<rad/s> overrides it for A/B;
 # a large value (e.g. 1000) removes the torque–speed limit.
 JDUCK_NO_LOAD_SPEED = float(os.environ.get("JDUCK_NOLOAD", "3.0"))
@@ -110,6 +113,8 @@ if _fw:
 else:
     JDUCK_FW_LAW = dict(pwm_per_count=1.0, pwm_ff=0.0, pwm_min=48.0, deadband_counts=2.0)
     JDUCK_FW_TAG = "fwcur"
+if os.environ.get("JDUCK_TORQUE"):
+    JDUCK_FW_TAG += f"_t{os.environ['JDUCK_TORQUE']}"
 if os.environ.get("JDUCK_NOLOAD"):
     JDUCK_FW_TAG += f"_w{os.environ['JDUCK_NOLOAD']}"
 

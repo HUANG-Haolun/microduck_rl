@@ -81,7 +81,7 @@ JDUCK_EFFORT_LIMIT = 0.8
 JDUCK_ARMATURE = 0.005
 
 jduck_actuators = BuiltinPositionActuatorCfg(
-    target_names_expr=(r"^(?!passive_|root$).*",),
+    target_names_expr=(r"^(?!passive_|trunk_base_freejoint$).*",),
     stiffness=JDUCK_ACTUATOR_KP,
     damping=JDUCK_ACTUATOR_KD,
     effort_limit=JDUCK_EFFORT_LIMIT,

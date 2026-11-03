@@ -140,6 +140,18 @@ DEFAULT_POSE = np.array([
     -0.4530,  # right_ankle
 ], dtype=np.float32)
 
+# jduck (--robot jduck): HOME_FRAME from robot/jduck_constants.py, same joint order.
+# Also stored in the exported ONNX metadata as default_joint_pos.
+JDUCK_XML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..",
+                         "jduck_mjcf", "scene_view.xml")
+JDUCK_DEFAULT_POSE = np.array([
+    0.0, 0.0, 0.25, -0.30, 0.05,     # left leg
+    0.0, 0.0, 0.0, 0.0,              # neck / head
+    0.0, 0.0, -0.25, 0.30, -0.05,    # right leg
+], dtype=np.float32)
+JDUCK_TRUNK_Z = 0.137
+JDUCK_VEL_LIMITS = (0.25, 0.15, 0.8)   # |lin_x|, |lin_y|, |ang_z| as trained
+
 
 class TerminalInput:
     """Single-keypress reader on stdin (cbreak mode, background thread).
@@ -1230,7 +1242,22 @@ def main():
                              "simulated legs (perfect IMU) and print each set's error against the "
                              "true trunk pose every second and at exit. Drives the robot around to "
                              "compare drift; combine with --odom-anchor-points to see each anchor.")
+    parser.add_argument("--robot", choices=("microduck", "jduck"), default="microduck",
+                        help="jduck: load jduck_mjcf/scene_view.xml (placeholder PD actuators, "
+                             "kp=8 kd=0.2 0.8 Nm, same as training), use jduck's HOME pose and "
+                             "trunk height, and its training velocity ranges. Implies --no-bam "
+                             "--new-cmd-obs --delay 1 3.")
     args = parser.parse_args()
+
+    if args.robot == "jduck":
+        global DEFAULT_POSE
+        DEFAULT_POSE = JDUCK_DEFAULT_POSE
+        args.no_bam = True
+        args.new_cmd_obs = True
+        if args.delay is None:
+            args.delay = [1, 3]
+        if args.scene is None:
+            args.scene = JDUCK_XML
 
     if not args.walking and not args.standing and not args.sitstand:
         parser.error("At least one of --walking, --standing or --sitstand must be provided")
@@ -1365,6 +1392,11 @@ def main():
         policy.vel_max_y = 0.0
         policy.vel_min_y = 0.0
         policy.vel_max_ang = 1.0      # ±1.0 rad heading error
+    elif args.robot == "jduck":
+        vx, vy, wz = JDUCK_VEL_LIMITS
+        policy.vel_max_x, policy.vel_min_x = vx, -vx
+        policy.vel_max_y, policy.vel_min_y = vy, -vy
+        policy.vel_max_ang = wz
     else:
         policy.vel_max_x = 0.3
         policy.vel_min_x = -0.3
@@ -1377,7 +1409,8 @@ def main():
     qpos_adr = model.jnt_qposadr[freejoint_id]
     data.qpos[qpos_adr + 0] = 0.0
     data.qpos[qpos_adr + 1] = 0.0
-    data.qpos[qpos_adr + 2] = 0.1385 if args.roller else 0.125  # rollers add 13.5mm height
+    data.qpos[qpos_adr + 2] = (JDUCK_TRUNK_Z if args.robot == "jduck"
+                               else 0.1385 if args.roller else 0.125)  # rollers add 13.5mm height
     data.qpos[qpos_adr + 3:qpos_adr + 7] = [1, 0, 0, 0]
     for i, qpos_idx in enumerate(policy.joint_qpos_indices):
         data.qpos[qpos_idx] = policy.default_pose[i]

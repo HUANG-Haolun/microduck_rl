@@ -23,7 +23,7 @@ def _model():
 def test_joint_layout_matches_microduck():
     m = _model()
     names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(m.njnt)]
-    assert names[0] == "root"
+    assert names[0] == "trunk_base_freejoint"
     servo_names = [n for n in names[1:] if not n.startswith("passive_")]
     assert servo_names == SERVOS
     assert "passive_mouth" in names

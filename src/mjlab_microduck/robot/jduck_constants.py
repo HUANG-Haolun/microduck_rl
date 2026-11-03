@@ -117,6 +117,11 @@ if os.environ.get("JDUCK_TORQUE"):
     JDUCK_FW_TAG += f"_t{os.environ['JDUCK_TORQUE']}"
 if os.environ.get("JDUCK_NOLOAD"):
     JDUCK_FW_TAG += f"_w{os.environ['JDUCK_NOLOAD']}"
+# JDUCK_QUANT=0 → continuous error instead of integer ADC counts (A/B only; the
+# real firmware always sees integer counts).
+JDUCK_FW_LAW["quantize"] = os.environ.get("JDUCK_QUANT", "1") != "0"
+if not JDUCK_FW_LAW["quantize"]:
+    JDUCK_FW_TAG += "_noquant"
 
 if JDUCK_ACTUATOR == "ubt12hc":
     # Command delay: 1–3 physics steps (5–15 ms). The serial round trip for 14

@@ -22,7 +22,12 @@ sys.argv, _argv = sys.argv[:1], sys.argv[1:]
 sys.path.insert(0, "scripts")
 import infer_policy as ip  # noqa: E402
 
+import os
 FW = dict(K=16, FF=15, DB=1, floor=0.0, stall=0.96, w0=4.8)
+# JDUCK_EVAL_FW="K,FF,DB" overrides the law; JDUCK_EVAL_QUANT=0 → continuous error
+if os.environ.get("JDUCK_EVAL_FW"):
+    FW["K"], FW["FF"], FW["DB"] = (float(x) for x in os.environ["JDUCK_EVAL_FW"].split(","))
+QUANT = os.environ.get("JDUCK_EVAL_QUANT", "1") != "0"
 # `pd:` prefix on an ONNX path = evaluate with the v0 placeholder PD actuator
 # (kp=8, kd=0.2, 0.8 N·m) that jduck_walk_v0.onnx was trained with.
 CMDS = [(0, 0, 0), (0.2, 0, 0), (-0.2, 0, 0), (0, 0.12, 0), (0, 0, 0.8), (0.15, 0, 0.5)]
@@ -96,8 +101,17 @@ class Rig:
             for _ in range(4):
                 d.qfrc_applied[:] = 0
                 if not self.pd:
-                    d.qfrc_applied[self.dofs] = ip.jduck_fw_torque(d.qpos[p.joint_qpos_indices], d.qvel[self.dofs],
-                                                                   d.ctrl[:14], self.phase, FW)
+                    q = d.qpos[p.joint_qpos_indices]
+                    if QUANT:
+                        tau = ip.jduck_fw_torque(q, d.qvel[self.dofs], d.ctrl[:14], self.phase, FW)
+                    else:   # same law on the continuous error (JDUCK_QUANT=0 training)
+                        k = ip.JDUCK_RAD_PER_COUNT
+                        err = (d.ctrl[:14] - q) / k
+                        mag = np.clip(FW["K"] * np.abs(err) + FW["FF"], FW["floor"], 255.0)
+                        pwm = np.where(np.abs(err) <= FW["DB"], 0.0, mag)
+                        tau = FW["stall"] * (np.sign(err) * pwm / 255.0 - d.qvel[self.dofs] / FW["w0"])
+                        tau = np.clip(np.where(pwm == 0, 0.0, tau), -FW["stall"], FW["stall"])
+                    d.qfrc_applied[self.dofs] = tau
                 mujoco.mj_step(m, d)
             now = self.contacts()
             lifts += sum(a and not b for a, b in zip(prev, now))
@@ -133,7 +147,7 @@ def main():
         pd = arg.startswith("pd:")
         onnx = arg[3:] if pd else arg
         rig = Rig(onnx, pd=pd)
-        print(f"\n=== {onnx} [{'PD actuator' if pd else 'K=16 firmware law'}]   (mean ± std over {REPS} runs: lag 1..3, varied ADC phase)")
+        print(f"\n=== {onnx} [{'PD actuator' if pd else f"fw K={FW['K']:g} FF={FW['FF']:g} DB={FW['DB']:g}{'' if QUANT else ' noquant'}"}]   (mean ± std over {REPS} runs: lag 1..3, varied ADC phase)")
         for c in CMDS:
             rs = runs(rig, c, 8.0)
             ok = [r for r in rs if "fell" not in r]

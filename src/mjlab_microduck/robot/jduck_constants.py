@@ -45,8 +45,11 @@ JDUCK_ACTUATOR = os.environ.get("JDUCK_ACTUATOR", "ubt12hc")
 assert JDUCK_ACTUATOR in ("ubt12hc", "pd"), JDUCK_ACTUATOR
 
 # HOME. Measured in sim from the MJCF: trunk_base origin height with the soles on
-# the floor.
-if JDUCK_ACTUATOR == "ubt12hc":
+# the floor. JDUCK_HOME=new|old overrides the default (new for ubt12hc, old for pd)
+# so actuator and pose can be A/B'd separately.
+JDUCK_HOME = os.environ.get("JDUCK_HOME", "new" if JDUCK_ACTUATOR == "ubt12hc" else "old")
+assert JDUCK_HOME in ("new", "old"), JDUCK_HOME
+if JDUCK_HOME == "new":
     # Knees bent the "other" way (hip_pitch −/+, knee +/−). Inside the friend's
     # measured ranges (jduck_tools/calibration.yaml), this pose needs only
     # ~0.10 N·m at the legs, below the firmware's 48-PWM floor (~0.15 N·m), and
@@ -92,7 +95,9 @@ JDUCK_COLLISION = CollisionCfg(
 
 _SERVO_JOINTS = (r"^(?!passive_|trunk_base_freejoint$).*",)
 JDUCK_EFFORT_LIMIT = 0.8     # URDF effort (friend-confirmed)
-JDUCK_NO_LOAD_SPEED = 3.0    # URDF velocity (friend-confirmed)
+# URDF velocity (friend-confirmed). JDUCK_NOLOAD=<rad/s> overrides it for A/B;
+# a large value (e.g. 1000) removes the torque–speed limit.
+JDUCK_NO_LOAD_SPEED = float(os.environ.get("JDUCK_NOLOAD", "3.0"))
 JDUCK_ARMATURE = 0.005       # guess; to be identified
 
 # Firmware law: JDUCK_FW="K,FF,DB" → pwm = K*|err| + FF (floor 0), deadband DB.
@@ -105,6 +110,8 @@ if _fw:
 else:
     JDUCK_FW_LAW = dict(pwm_per_count=1.0, pwm_ff=0.0, pwm_min=48.0, deadband_counts=2.0)
     JDUCK_FW_TAG = "fwcur"
+if os.environ.get("JDUCK_NOLOAD"):
+    JDUCK_FW_TAG += f"_w{os.environ['JDUCK_NOLOAD']}"
 
 if JDUCK_ACTUATOR == "ubt12hc":
     # Command delay: 1–3 physics steps (5–15 ms). The serial round trip for 14

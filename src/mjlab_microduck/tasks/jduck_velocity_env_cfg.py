@@ -24,6 +24,7 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from mjlab_microduck.robot.jduck_constants import (
     JDUCK_ACTUATOR,
+    JDUCK_FW_TAG,
     JDUCK_HOME_TRUNK_Z,
     JDUCK_WALK_ROBOT_CFG,
 )
@@ -151,4 +152,6 @@ def make_jduck_velocity_env_cfg(
 
 JduckRlCfg = deepcopy(MicroduckRlCfg)
 JduckRlCfg.experiment_name = f"jduck_velocity_{JDUCK_ACTUATOR}"
-JduckRlCfg.run_name = f"jduck_velocity_{JDUCK_ACTUATOR}"
+if JDUCK_ACTUATOR == "ubt12hc":
+    JduckRlCfg.experiment_name += f"_{JDUCK_FW_TAG}"
+JduckRlCfg.run_name = JduckRlCfg.experiment_name

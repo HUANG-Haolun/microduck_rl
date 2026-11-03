@@ -45,9 +45,13 @@ class Ubt12hcActuatorCfg(IdealPdActuatorCfg):
 
     stall_torque: float = 0.8          # N·m at duty 1.0 (URDF effort)
     no_load_speed: float = 3.0         # rad/s at duty 1.0 (URDF velocity)
+    # Law: pwm = clamp(pwm_per_count*|err| + pwm_ff, pwm_min, pwm_max), 0 if |err|<=deadband
+    # Current firmware   : pwm_per_count=1, pwm_ff=0,  pwm_min=48, deadband=2
+    # Proposed new law   : pwm_per_count=K, pwm_ff=FF, pwm_min=0,  deadband=1
     pwm_min: float = 48.0              # firmware MIN_OUTPUT_PWM
     pwm_max: float = 255.0             # firmware MAX_output_pwm
     pwm_per_count: float = 1.0         # firmware: pwm = |err| (Kp unused)
+    pwm_ff: float = 0.0                # static-friction feed-forward added outside the deadband
     deadband_counts: float = 2.0       # firmware POSITION_DEADBAND
     rad_per_count: float = RAD_PER_COUNT
     quantize: bool = True              # the firmware sees integer ADC counts
@@ -78,7 +82,7 @@ class Ubt12hcActuator(IdealPdActuator[Ubt12hcActuatorCfg]):
         else:
             err = (cmd.position_target - cmd.pos) / k
 
-        mag = torch.clamp(err.abs() * c.pwm_per_count, c.pwm_min, c.pwm_max)
+        mag = torch.clamp(err.abs() * c.pwm_per_count + c.pwm_ff, c.pwm_min, c.pwm_max)
         pwm = torch.where(err.abs() <= c.deadband_counts, torch.zeros_like(mag), mag)
         duty = torch.sign(err) * pwm / 255.0
 

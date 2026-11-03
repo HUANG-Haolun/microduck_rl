@@ -95,6 +95,17 @@ JDUCK_EFFORT_LIMIT = 0.8     # URDF effort (friend-confirmed)
 JDUCK_NO_LOAD_SPEED = 3.0    # URDF velocity (friend-confirmed)
 JDUCK_ARMATURE = 0.005       # guess; to be identified
 
+# Firmware law: JDUCK_FW="K,FF,DB" → pwm = K*|err| + FF (floor 0), deadband DB.
+# Unset = the CURRENT firmware (pwm = clamp(|err|, 48, 255), deadband 2).
+_fw = os.environ.get("JDUCK_FW")
+if _fw:
+    _k, _ff, _db = (float(x) for x in _fw.split(","))
+    JDUCK_FW_LAW = dict(pwm_per_count=_k, pwm_ff=_ff, pwm_min=0.0, deadband_counts=_db)
+    JDUCK_FW_TAG = f"k{_k:g}ff{_ff:g}db{_db:g}"
+else:
+    JDUCK_FW_LAW = dict(pwm_per_count=1.0, pwm_ff=0.0, pwm_min=48.0, deadband_counts=2.0)
+    JDUCK_FW_TAG = "fwcur"
+
 if JDUCK_ACTUATOR == "ubt12hc":
     # Command delay: 1–3 physics steps (5–15 ms). The serial round trip for 14
     # servos at 230400 baud is ~10 ms.
@@ -109,6 +120,7 @@ if JDUCK_ACTUATOR == "ubt12hc":
         frictionloss=0.01,
         delay_min_lag=1,
         delay_max_lag=3,
+        **JDUCK_FW_LAW,
     )
 else:
     jduck_actuators = BuiltinPositionActuatorCfg(

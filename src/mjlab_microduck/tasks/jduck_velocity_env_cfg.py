@@ -16,11 +16,14 @@ Everything else (rewards, curricula, obs layout) is unchanged on purpose, so a
 run is directly comparable to Mjlab-Velocity-Flat-MicroDuck.
 """
 
+import os
 from copy import deepcopy
 
 from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.managers import EventTermCfg
+from mjlab.managers import EventTermCfg, RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+
+from mjlab_microduck.tasks import mdp as microduck_mdp
 
 from mjlab_microduck.robot.jduck_constants import (
     JDUCK_ACTUATOR,
@@ -62,6 +65,21 @@ JDUCK_HEAD_CAPS = (1.10, 1.10, 0.60, 0.26)
 JDUCK_TORQUE_SCALE = (0.80, 1.15)
 JDUCK_SPEED_SCALE = (0.85, 1.15)
 
+# Standing-still penalties (JDUCK_STAND_PENALTY=0 disables). The ubt12hc runs
+# step in place at zero command (4–6 lift-offs/s in scripts/jduck_eval.py), while
+# the PD run (v0) stands still. The firmware law (deadband + FF kick) makes it
+# cheaper to balance by stepping than by holding. Same recipe as air_time but
+# with the sign flipped: air_time pays for stepping while walking, these charge
+# for stepping/jitter while standing. Both functions already exist in mdp.py.
+#   foot_step_penalty_when_standing: 1 when standing, not pushed (body < 0.2 m/s)
+#     and a foot just lifted. −1.0 ≈ the size of air_time (~1) for a robot that
+#     keeps stepping, and it doesn't fire during push recovery.
+#   joint_vel_l2_when_standing: Σ leg qd² while standing. Stepping in place is
+#     O(10–50), so −0.01 is a noticeable but not dominant push.
+JDUCK_STAND_PENALTY = os.environ.get("JDUCK_STAND_PENALTY", "1") != "0"
+JDUCK_STAND_STEP_W = -1.0
+JDUCK_STAND_JOINT_VEL_W = -0.01
+
 
 def randomize_ubt12hc(
     env,
@@ -91,6 +109,28 @@ def randomize_ubt12hc(
 
         act.set_scales(env_ids, torque_scale=u(*torque_range), speed_scale=u(*speed_range))
         act.reset_encoder_phase(env_ids)
+
+
+def leg_joint_vel_l2_when_standing(
+    env,
+    command_name: str = "twist",
+    command_threshold: float = 0.01,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+):
+    """Σ leg joint qd² while the twist command is ~0.
+
+    Same as mdp.joint_vel_l2_when_standing, but it maps through _servo_joint_ids.
+    That one hard-codes entity indices 0–4/9–13, and on jduck `passive_mouth` sits
+    at index 9, so it would pick the mouth and drop the right ankle.
+    """
+    import torch
+
+    asset = env.scene[asset_cfg.name]
+    cmd = env.command_manager.get_command(command_name)
+    standing = (torch.norm(cmd[:, :2], dim=1) + torch.abs(cmd[:, 2]) < command_threshold).float()
+    servo = microduck_mdp._servo_joint_ids(env, asset)
+    legs = [servo[i] for i in (*range(0, 5), *range(9, 14))]   # 14-servo layout → entity ids
+    return standing * torch.sum(asset.data.joint_vel[:, legs] ** 2, dim=-1)
 
 
 def _clip_ranges(ranges, caps):
@@ -140,6 +180,18 @@ def make_jduck_velocity_env_cfg(
     cfg.rewards["track_linear_velocity"].params["std"] = JDUCK_LIN_STD
     cfg.rewards["track_angular_velocity"].params["std"] = JDUCK_ANG_STD
 
+    if JDUCK_STAND_PENALTY:
+        cfg.rewards["stand_step_penalty"] = RewardTermCfg(
+            func=microduck_mdp.foot_step_penalty_when_standing,
+            weight=JDUCK_STAND_STEP_W,
+            params={"command_threshold": 0.01, "body_vel_threshold": 0.2, "air_time_threshold": 0.05},
+        )
+        cfg.rewards["stand_joint_vel"] = RewardTermCfg(
+            func=leg_joint_vel_l2_when_standing,
+            weight=JDUCK_STAND_JOINT_VEL_W,
+            params={"command_threshold": 0.01},
+        )
+
     head = deepcopy(cfg.commands["head_pose"])
     head.ranges = _clip_ranges(head.ranges, JDUCK_HEAD_CAPS)
     cfg.commands["head_pose"] = head
@@ -156,4 +208,6 @@ JduckRlCfg.experiment_name = f"jduck_velocity_{JDUCK_ACTUATOR}"
 if JDUCK_ACTUATOR == "ubt12hc":
     JduckRlCfg.experiment_name += f"_{JDUCK_FW_TAG}"
 JduckRlCfg.experiment_name += f"_home{JDUCK_HOME}"
+if JDUCK_STAND_PENALTY:
+    JduckRlCfg.experiment_name += "_standpen"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

@@ -149,8 +149,31 @@ JDUCK_DEFAULT_POSE = np.array([
     0.0, 0.0, 0.0, 0.0,              # neck / head
     0.0, 0.0, -0.25, 0.30, -0.05,    # right leg
 ], dtype=np.float32)
-JDUCK_TRUNK_Z = 0.137
+JDUCK_TRUNK_Z = 0.137                  # fallback; recomputed from HOME at startup
 JDUCK_VEL_LIMITS = (0.25, 0.15, 0.8)   # |lin_x|, |lin_y|, |ang_z| as trained
+JDUCK_RAD_PER_COUNT = 2 * math.pi / 1024
+
+
+def _onnx_default_pose(path):
+    """HOME stored at export time in the ONNX metadata, or None."""
+    if not path:
+        return None
+    try:
+        meta = ort.InferenceSession(path).get_modelmeta().custom_metadata_map
+        return np.array([float(x) for x in meta["default_joint_pos"].split(",")], dtype=np.float32)
+    except Exception:
+        return None
+
+
+def jduck_fw_torque(q, qd, q_target, phase, fw):
+    """UBT-12HC firmware law + DC motor, same as mjlab_microduck/actuator/ubt12hc.py."""
+    k = JDUCK_RAD_PER_COUNT
+    err = np.round(q_target / k + phase) - np.floor(q / k + phase)
+    mag = np.clip(fw["K"] * np.abs(err) + fw["FF"], fw["floor"], 255.0)
+    pwm = np.where(np.abs(err) <= fw["DB"], 0.0, mag)
+    tau = fw["stall"] * (np.sign(err) * pwm / 255.0 - qd / fw["w0"])
+    tau = np.where(pwm == 0, 0.0, tau)
+    return np.clip(tau, -fw["stall"], fw["stall"])
 
 
 class TerminalInput:
@@ -1247,17 +1270,37 @@ def main():
                              "kp=8 kd=0.2 0.8 Nm, same as training), use jduck's HOME pose and "
                              "trunk height, and its training velocity ranges. Implies --no-bam "
                              "--new-cmd-obs --delay 1 3.")
+    parser.add_argument("--jduck-fw", default="16,15,1", metavar="K,FF,DB",
+                        help="(jduck) UBT-12HC firmware law the policy was trained with "
+                             "(JDUCK_FW). Default 16,15,1 = firmware/ubt12hc_pd. "
+                             "'' = use the XML PD actuators (for the v0 PD policy).")
+    parser.add_argument("--jduck-torque", type=float, default=0.96, help="(jduck) stall torque N·m (JDUCK_TORQUE)")
+    parser.add_argument("--jduck-noload", type=float, default=4.8, help="(jduck) no-load speed rad/s (JDUCK_NOLOAD)")
     args = parser.parse_args()
 
+    jduck_fw = None
     if args.robot == "jduck":
         global DEFAULT_POSE
         DEFAULT_POSE = JDUCK_DEFAULT_POSE
+        # HOME comes from the ONNX metadata (default_joint_pos), so old (PD, v0
+        # HOME) and new (ubt12hc firmware, new HOME) jduck policies both load right.
+        onnx_home = _onnx_default_pose(args.walking or args.standing or args.sitstand)
+        if onnx_home is not None:
+            DEFAULT_POSE = onnx_home
         args.no_bam = True
         args.new_cmd_obs = True
         if args.delay is None:
             args.delay = [1, 3]
         if args.scene is None:
             args.scene = JDUCK_XML
+        if args.jduck_fw:
+            # Servo-firmware actuator, same as training (actuator/ubt12hc.py):
+            # pwm = clamp(K|err|+FF, floor, 255), 0 in the deadband, on quantized ADC
+            # counts, DC motor τ = τ_stall·(duty − ω/ω0). Applied as qfrc each step;
+            # the XML position actuators are zeroed.
+            k, ff, db = (float(x) for x in args.jduck_fw.split(","))
+            jduck_fw = dict(K=k, FF=ff, DB=db, floor=0.0,
+                            stall=args.jduck_torque, w0=args.jduck_noload)
 
     if not args.walking and not args.standing and not args.sitstand:
         parser.error("At least one of --walking, --standing or --sitstand must be provided")
@@ -1418,6 +1461,20 @@ def main():
         bam_ctrl.reset(data.qpos)   # clears voltage-drop state, q_target = current qpos
     policy.set_position_targets(policy.default_pose)
     mujoco.mj_forward(model, data)
+    if args.robot == "jduck":
+        # Soles exactly on the floor (+1 mm) for whichever HOME the policy uses.
+        sole = min(data.site("left_foot").xpos[2], data.site("right_foot").xpos[2])
+        data.qpos[qpos_adr + 2] += 0.001 - sole
+        mujoco.mj_forward(model, data)
+
+    jduck_dofs = jduck_phase = None
+    if jduck_fw is not None:
+        jduck_dofs = np.array(policy.joint_qvel_indices)
+        jduck_phase = np.random.default_rng(0).random(len(jduck_dofs))   # ADC phase
+        model.actuator_gainprm[:, 0] = 0.0   # XML position actuators off: the
+        model.actuator_biasprm[:, :3] = 0.0  # firmware law below drives the joints
+        print(f"jduck servo: firmware law K={jduck_fw['K']:g} FF={jduck_fw['FF']:g} "
+              f"DB={jduck_fw['DB']:g}, {jduck_fw['stall']} N·m, {jduck_fw['w0']} rad/s (same as training)")
 
     # Verify observation size
     test_obs = policy.get_observations()
@@ -1807,6 +1864,12 @@ def main():
                         # to data.ctrl and pushes the friction budget onto the
                         # dofs so MuJoCo's solver applies it on this step.
                         bam_ctrl.update()
+                    if jduck_fw is not None:
+                        q = data.qpos[policy.joint_qpos_indices]
+                        qd = data.qvel[jduck_dofs]
+                        data.qfrc_applied[:] = 0.0
+                        data.qfrc_applied[jduck_dofs] = jduck_fw_torque(
+                            q, qd, data.ctrl[:len(jduck_dofs)], jduck_phase, jduck_fw)
                     mujoco.mj_step(model, data)
 
                 if odom_compare is not None:

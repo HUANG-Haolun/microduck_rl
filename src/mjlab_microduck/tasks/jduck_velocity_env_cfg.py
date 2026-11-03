@@ -43,6 +43,10 @@ JDUCK_HEAD_BODY_NAMES = (
 JDUCK_LIN_VEL_X = (-0.25, 0.25)
 JDUCK_LIN_VEL_Y = (-0.15, 0.15)
 JDUCK_ANG_VEL_Z = (-0.8, 0.8)
+# Gaussian tracking widths, scaled ∝ command range: microduck's sqrt(0.1) at
+# ±0.4 m/s → sqrt(0.1)·0.25/0.4, and sqrt(0.5) at ±1.0 rad/s → sqrt(0.5)·0.8.
+JDUCK_LIN_STD = 0.198
+JDUCK_ANG_STD = 0.566
 
 # Final head-pose command caps (deltas from HOME=0), kept ~10% inside the URDF
 # limits. The limits are asymmetric, so take the smaller side to stay symmetric.
@@ -124,6 +128,15 @@ def make_jduck_velocity_env_cfg(
     twist.ranges.lin_vel_y = JDUCK_LIN_VEL_Y
     twist.ranges.ang_vel_z = JDUCK_ANG_VEL_Z
     cfg.commands["twist"] = twist
+
+    # Tracking std must scale with the command range. With microduck's
+    # std²=0.1 and jduck's ±0.25 m/s, STANDING STILL already earns ~83% of
+    # track_linear_velocity. The first ubt12hc run (2026-11-03) found exactly
+    # that: air_time ≈ 0, dx = 0 over 8 s at a 0.2 m/s command, while the logged
+    # tracking reward looked healthy (1.46/2.0). Keep the stand-still payoff
+    # near microduck's (~65% lin / ~60% ang) at jduck's smaller ranges.
+    cfg.rewards["track_linear_velocity"].params["std"] = JDUCK_LIN_STD
+    cfg.rewards["track_angular_velocity"].params["std"] = JDUCK_ANG_STD
 
     head = deepcopy(cfg.commands["head_pose"])
     head.ranges = _clip_ranges(head.ranges, JDUCK_HEAD_CAPS)

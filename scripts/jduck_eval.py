@@ -177,6 +177,43 @@ def foot_detail(rig, T=10.0):
             f"(<50 ms: {100 * np.mean(durs < 0.05):.0f}%), max foot lift {1000 * hmax:.1f} mm")
 
 
+def stand_jitter(rig, seeds=8, T=10.0):
+    """Zero command, 10 s, last 7 s: how much the policy keeps moving its targets
+    (deg per 20 ms step, leg joints) and the leg joint speed. v0 on PD: 0.000° and
+    0.0001 rad/s; a visibly jittering policy: 2–4° and 0.3–0.5 rad/s."""
+    m, d, p = rig.m, rig.d, rig.pol
+    legs = [*range(0, 5), *range(9, 14)]
+    da, qd = [], []
+    for seed in range(seeds):
+        rig.phase = np.random.default_rng(100 + seed).random(14)
+        rig.delay.rng = np.random.default_rng(seed)
+        rig.reset()
+        p.set_vel_cmd(0, 0, 0)
+        tg, v = [], []
+        for k in range(int(T / 0.02)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                p.update_behavior(0.02)
+                p.apply_action(p.infer())
+            target = d.ctrl[:14].copy()
+            if k * 0.02 > 3:
+                tg.append(target[legs])
+            for _ in range(4):
+                d.ctrl[:14] = rig.delay(target)
+                d.qfrc_applied[:] = 0
+                if not rig.pd:
+                    d.qfrc_applied[rig.dofs] = ip.jduck_fw_torque(d.qpos[p.joint_qpos_indices], d.qvel[rig.dofs],
+                                                                  d.ctrl[:14], rig.phase, FW)
+                mujoco.mj_step(m, d)
+                if k * 0.02 > 3:
+                    v.append(np.abs(d.qvel[rig.dofs][legs]).mean())
+            if d.xmat[1].reshape(3, 3)[2, 2] < math.cos(math.radians(60)):
+                return "FELL"
+        da.append(np.degrees(np.abs(np.diff(np.array(tg), axis=0)).mean()))
+        qd.append(np.mean(v))
+    return (f"target change median {np.median(da):.3f}° max {max(da):.3f}° /step, "
+            f"leg |qd| median {np.median(qd):.4f} max {max(qd):.4f} rad/s ({seeds} seeds)")
+
+
 def runs(rig, cmd, T):
     out = []
     for rep in range(REPS):
@@ -208,6 +245,7 @@ def main():
                   f"  (ideal {ideal[0]:+.1f},{ideal[1]:+.1f}, yaw {math.degrees(c[2] * 8):+.0f}°)"
                   f"  hip_yaw {100 * np.mean([r['yaw_peak'] for r in ok]):.0f}%" + (f"  FELL {fell}/{REPS}" if fell else ""))
         print(f"  stand foot detail: {foot_detail(rig)}")
+        print(f"  stand jitter: {stand_jitter(rig)}")
         rs = [r for r in runs(rig, (0, 0, 0), 10.0) if "fell" not in r]
         if rs:
             print(f"  stand 10 s: {np.mean([r['lifts_per_s'] for r in rs]):.2f} foot lift-offs/s, "

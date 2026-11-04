@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Train one jduck variant, export it, evaluate it. Results → logs/pipeline/<name>.txt
+#   scripts/jduck_pipeline.sh <name> [iters] -- KEY=VAL ...    (JDUCK_* env vars of the run)
+# Fixed: firmware K16 FF0 DB0, 0.96 N·m, 4.8 rad/s, 4096 envs, seed from SEED (default 1).
+set -uo pipefail
+cd "$(dirname "$0")/.."
+name=$1; iters=${2:-4000}; shift 2; [ "${1:-}" = "--" ] && shift
+export PATH=$HOME/.local/bin:$PATH
+mkdir -p logs/pipeline
+out=logs/pipeline/$name.txt
+envs=(JDUCK_FW=16,0,0 JDUCK_NOLOAD=4.8 JDUCK_TORQUE=0.96 WANDB_MODE=offline "$@")
+echo "== $name  $(date +%F_%T)  ${envs[*]}  iters=$iters seed=${SEED:-1}" > "$out"
+env -u PYTHONPATH "${envs[@]}" uv run --frozen train Mjlab-Velocity-Flat-JDuck --env.scene.num-envs 4096 \
+    --agent.max_iterations "$iters" --agent.seed "${SEED:-1}" --agent.run-name "$name" \
+    --agent.logger tensorboard > "logs/pipeline/$name.train.log" 2>&1
+grep -a -o 'Learning iteration [0-9]*' "logs/pipeline/$name.train.log" | tail -1 >> "$out"
+grep -a -E 'Mean episode length|fell_over|track_angular_velocity|stand_action_rate' "logs/pipeline/$name.train.log" | tail -4 >> "$out"
+d=$(ls -td logs/rsl_rl/jduck_velocity*/*_"$name"/ 2>/dev/null | head -1)
+[ -n "$d" ] || { echo "no run dir" >> "$out"; exit 1; }
+echo "run: $d" >> "$out"
+last=$(( iters - 1 ))
+onnx=jduck_$name.onnx
+scripts/jduck_export.sh "$d" "$last" "$onnx" 2>&1 | grep -E 'ONNX ok|训练环境|失败|键盘玩' >> "$out"
+JDUCK_EVAL_FW=16,0,0 env -u PYTHONPATH uv run --frozen python scripts/jduck_eval.py "$onnx" 2>&1 \
+    | grep -v -E 'Warp|mdp\]|Vel cmd' >> "$out"
+echo "== done $(date +%F_%T)" >> "$out"

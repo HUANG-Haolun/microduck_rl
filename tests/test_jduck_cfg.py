@@ -73,9 +73,10 @@ def test_jduck_stand_action_rate_penalty():
         "print(None if t is None else t.weight, m.JduckRlCfg.experiment_name)\n"
     )
     def run(w):
-        env = {k: v for k, v in os.environ.items() if k != "JDUCK_STAND_ACT_RATE"}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("JDUCK_STAND_ACT_RATE", "JDUCK_SAR_"))}
         if w is not None:
             env["JDUCK_STAND_ACT_RATE"] = w
+            env["JDUCK_SAR_START"] = "0"     # weight from iteration 0 (the staged default starts at 0)
         out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
         return out.stdout.strip().splitlines()[-1].split()
 
@@ -83,3 +84,27 @@ def test_jduck_stand_action_rate_penalty():
     assert weight == "None" and "_sar" not in name          # default off: old runs rebuild unchanged
     weight, name = run("20")
     assert float(weight) == -20.0 and name.endswith("_sar20")
+
+
+def test_jduck_staged_action_rate_and_yaw_ema():
+    """Staged stand_action_rate (0 → ¼ → ½ → full) and the EMA yaw-rate term."""
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import mjlab_microduck.tasks.jduck_velocity_env_cfg as m\n"
+        "c = m.make_jduck_velocity_env_cfg()\n"
+        "print(c.rewards['stand_action_rate'].weight)\n"
+        "print([s['weight'] for s in c.curriculum['stand_action_rate_weight'].params['weight_stages']])\n"
+        "print(c.rewards['track_angular_velocity'].func.__name__, c.rewards['track_angular_velocity'].weight)\n"
+        "print(m.JduckRlCfg.experiment_name)\n"
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith("JDUCK_")}
+    env.update(JDUCK_STAND_ACT_RATE="10", JDUCK_ANG_EMA="0.5")
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    w0, stages, ang, name = out.stdout.strip().splitlines()[-4:]
+    assert float(w0) == 0.0
+    assert stages == "[0.0, -2.5, -5.0, -10.0]"
+    assert ang == "track_yaw_rate_ema 2.0"
+    assert name.endswith("_sar10from1500_angema0.5")

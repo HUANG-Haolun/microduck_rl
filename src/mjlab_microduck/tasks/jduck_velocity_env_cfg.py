@@ -20,7 +20,7 @@ import os
 from copy import deepcopy
 
 from mjlab.envs import ManagerBasedRlEnvCfg
-from mjlab.managers import EventTermCfg, RewardTermCfg
+from mjlab.managers import CurriculumTermCfg, EventTermCfg, RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from mjlab_microduck.tasks import mdp as microduck_mdp
@@ -107,6 +107,23 @@ JDUCK_STAND_STILL_W = 1.0
 # costs ~1 per step, the size of one stand2 term; small balance corrections
 # (quadratic) stay cheap. Adds `_sar<w>` to the experiment name.
 JDUCK_STAND_ACT_RATE_W = float(os.environ.get("JDUCK_STAND_ACT_RATE", "0"))
+# sar20 (w=20 from iteration 0) never learned to stand: episodes 18 → 238 steps
+# vs ~970 without it. Taxing the early random actions blocks balance discovery
+# (AGENTS.md: introduce smoothness after the skill exists). So the weight is
+# staged: 0 until JDUCK_SAR_START (iterations), then 1/4, 1/2, full, spaced
+# JDUCK_SAR_RAMP iterations apart.
+JDUCK_SAR_START = int(os.environ.get("JDUCK_SAR_START", "1500"))
+JDUCK_SAR_RAMP = int(os.environ.get("JDUCK_SAR_RAMP", "500"))
+
+# Yaw-rate tracking on a moving average (JDUCK_ANG_EMA=<tau s>, default 0 = the
+# stock instantaneous term). Measured on ff0db0_homeold walking at 0.2 m/s: mean
+# wz −0.15 rad/s but instantaneous (cmd − wz)² ≈ 7.7, because the trunk twists
+# ±~2.7 rad/s every step; plus roll/pitch rate² ≈ 0.6–1.1 that the stock term
+# also charges. exp(−(z+xy)/0.32) ≈ 0 whether the robot turns or not, so turning
+# had no gradient (every jduck run, v0 included, turned 0–35 % of the command).
+# Tracking an EMA of wz lets the step twist average out and prices only the
+# mean turn rate. Adds `_angema<tau>` to the experiment name.
+JDUCK_ANG_EMA = float(os.environ.get("JDUCK_ANG_EMA", "0"))
 
 
 def randomize_ubt12hc(
@@ -195,6 +212,36 @@ def action_rate_l2_when_standing(
     return standing * torch.sum(da ** 2, dim=-1)
 
 
+class track_yaw_rate_ema:
+    """exp(−(cmd_wz − EMA(wz))² / std²): yaw-rate tracking on a moving average.
+
+    EMA time constant `tau` (s). Reset to 0 at episode start; the command is
+    held for several seconds, so the lag matters only right after a resample.
+    """
+
+    def __init__(self, cfg, env):
+        import torch
+
+        self.ema = torch.zeros(env.num_envs, device=env.device)
+        self.alpha = min(1.0, env.step_dt / cfg.params["tau"])
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            self.ema[:] = 0.0
+        else:
+            self.ema[env_ids] = 0.0
+
+    def __call__(self, env, std: float, tau: float, command_name: str = "twist",
+                 asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+        import torch
+
+        del tau
+        wz = env.scene[asset_cfg.name].data.root_link_ang_vel_b[:, 2]
+        self.ema += self.alpha * (wz - self.ema)
+        cmd = env.command_manager.get_command(command_name)
+        return torch.exp(-torch.square(cmd[:, 2] - self.ema) / std**2)
+
+
 def _clip_ranges(ranges, caps):
     return tuple(
         (max(lo, -c), min(hi, c)) for (lo, hi), c in zip(ranges, caps)
@@ -241,6 +288,13 @@ def make_jduck_velocity_env_cfg(
     # near microduck's (~65% lin / ~60% ang) at jduck's smaller ranges.
     cfg.rewards["track_linear_velocity"].params["std"] = JDUCK_LIN_STD
     cfg.rewards["track_angular_velocity"].params["std"] = JDUCK_ANG_STD
+    if JDUCK_ANG_EMA > 0:
+        w = cfg.rewards["track_angular_velocity"].weight
+        cfg.rewards["track_angular_velocity"] = RewardTermCfg(
+            func=track_yaw_rate_ema,
+            weight=w,
+            params={"std": JDUCK_ANG_STD, "tau": JDUCK_ANG_EMA, "command_name": "twist"},
+        )
 
     if JDUCK_STAND == "v1":
         cfg.rewards["stand_step_penalty"] = RewardTermCfg(
@@ -269,9 +323,23 @@ def make_jduck_velocity_env_cfg(
     if JDUCK_STAND_ACT_RATE_W > 0:
         cfg.rewards["stand_action_rate"] = RewardTermCfg(
             func=action_rate_l2_when_standing,
-            weight=-JDUCK_STAND_ACT_RATE_W,
+            weight=0.0 if JDUCK_SAR_START > 0 else -JDUCK_STAND_ACT_RATE_W,
             params={"command_threshold": 0.01},
         )
+        if JDUCK_SAR_START > 0:
+            steps = 24   # NUM_STEPS_PER_ENV: curriculum steps are env steps
+            cfg.curriculum["stand_action_rate_weight"] = CurriculumTermCfg(
+                func=microduck_mdp.reward_weight,
+                params={
+                    "reward_name": "stand_action_rate",
+                    "weight_stages": [
+                        {"step": 0, "weight": 0.0},
+                        *({"step": (JDUCK_SAR_START + i * JDUCK_SAR_RAMP) * steps,
+                           "weight": -JDUCK_STAND_ACT_RATE_W * f}
+                          for i, f in enumerate((0.25, 0.5, 1.0))),
+                    ],
+                },
+            )
 
     head = deepcopy(cfg.commands["head_pose"])
     head.ranges = _clip_ranges(head.ranges, JDUCK_HEAD_CAPS)
@@ -295,4 +363,8 @@ elif JDUCK_STAND == "v2":
     JduckRlCfg.experiment_name += "_stand2"
 if JDUCK_STAND_ACT_RATE_W > 0:
     JduckRlCfg.experiment_name += f"_sar{JDUCK_STAND_ACT_RATE_W:g}"
+    if JDUCK_SAR_START > 0:
+        JduckRlCfg.experiment_name += f"from{JDUCK_SAR_START}"
+if JDUCK_ANG_EMA > 0:
+    JduckRlCfg.experiment_name += f"_angema{JDUCK_ANG_EMA:g}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

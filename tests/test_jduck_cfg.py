@@ -54,3 +54,32 @@ def test_left_right_symmetric_at_zero_pose():
         assert left[0] == pytest.approx(right[0], abs=1e-4)
         assert left[1] == pytest.approx(-right[1], abs=1e-4)
         assert left[2] == pytest.approx(right[2], abs=1e-4)
+
+
+def test_jduck_stand_action_rate_penalty():
+    """JDUCK_STAND_ACT_RATE adds a negative-weight zero-command action-rate term.
+
+    Runs in a subprocess: this file imports jduck_constants first, so the task
+    package's import-time registration is already half done in this process.
+    """
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import mjlab_microduck.tasks.jduck_velocity_env_cfg as m\n"
+        "c = m.make_jduck_velocity_env_cfg()\n"
+        "t = c.rewards.get('stand_action_rate')\n"
+        "print(None if t is None else t.weight, m.JduckRlCfg.experiment_name)\n"
+    )
+    def run(w):
+        env = {k: v for k, v in os.environ.items() if k != "JDUCK_STAND_ACT_RATE"}
+        if w is not None:
+            env["JDUCK_STAND_ACT_RATE"] = w
+        out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+        return out.stdout.strip().splitlines()[-1].split()
+
+    weight, name = run(None)
+    assert weight == "None" and "_sar" not in name          # default off: old runs rebuild unchanged
+    weight, name = run("20")
+    assert float(weight) == -20.0 and name.endswith("_sar20")

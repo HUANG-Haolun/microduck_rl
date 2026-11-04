@@ -41,8 +41,11 @@ class Rig:
         self.m.opt.timestep = 0.005
         self.d = mujoco.MjData(self.m)
         with contextlib.redirect_stdout(io.StringIO()):
-            self.pol = ip.PolicyInference(self.m, self.d, walking_onnx_path=onnx, delay_min_lag=1,
-                                          delay_max_lag=3, use_projected_gravity=True, new_cmd_obs=True)
+            self.pol = ip.PolicyInference(self.m, self.d, walking_onnx_path=onnx, delay_min_lag=0,
+                                          delay_max_lag=0, use_projected_gravity=True, new_cmd_obs=True)
+        # Training delays the actuator 1–3 PHYSICS steps (5–15 ms), resampled each
+        # step — not 1–3 policy steps (20–60 ms), which PolicyInference's own delay does.
+        self.delay = ip.SubstepDelay(1, 3, seed=0)
         self.dofs = np.array(self.pol.joint_qvel_indices)
         self.phase = np.random.default_rng(0).random(14)
         if not pd:   # firmware law drives the joints; XML actuators off
@@ -72,6 +75,7 @@ class Rig:
         # Fresh episode: clear the action history and the delay buffer, or the
         # previous run's actions leak into the first steps of this one.
         p.last_action[:] = 0
+        self.delay.reset()
         if getattr(p, "action_buffer", None) is not None:
             for buf in p.action_buffer:
                 buf[:] = 0
@@ -98,7 +102,9 @@ class Rig:
             with contextlib.redirect_stdout(io.StringIO()):
                 p.update_behavior(0.02)
                 p.apply_action(p.infer())
+            target = d.ctrl[:14].copy()
             for _ in range(4):
+                d.ctrl[:14] = self.delay(target)
                 d.qfrc_applied[:] = 0
                 if not self.pd:
                     q = d.qpos[p.joint_qpos_indices]
@@ -130,13 +136,51 @@ class Rig:
         return dict(dx=dx, yaw=yaw, lifts_per_s=lifts / T, yaw_peak=yaw_peak)
 
 
-REPS = 4   # each command is run with every lag 1..3 and different ADC phases
+REPS = 4   # each command is run with different delay draws and ADC phases
+
+
+def foot_detail(rig, T=10.0):
+    """Stand still T s: count lift-offs, airborne durations, max foot height."""
+    m, d, p = rig.m, rig.d, rig.pol
+    rig.delay.rng = np.random.default_rng(99)
+    rig.reset()
+    p.set_vel_cmd(0, 0, 0)
+    air = [0.0, 0.0]
+    durs = []
+    hmax = 0.0
+    z0 = min(d.site("left_foot").xpos[2], d.site("right_foot").xpos[2])
+    for _ in range(int(T / 0.02)):
+        with contextlib.redirect_stdout(io.StringIO()):
+            p.update_behavior(0.02)
+            p.apply_action(p.infer())
+        target = d.ctrl[:14].copy()
+        for _ in range(4):
+            d.ctrl[:14] = rig.delay(target)
+            d.qfrc_applied[:] = 0
+            if not rig.pd:
+                d.qfrc_applied[rig.dofs] = ip.jduck_fw_torque(d.qpos[p.joint_qpos_indices], d.qvel[rig.dofs],
+                                                              d.ctrl[:14], rig.phase, FW)
+            mujoco.mj_step(m, d)
+            c = rig.contacts()
+            for i in range(2):
+                if c[i]:
+                    if air[i] > 0:
+                        durs.append(air[i])
+                    air[i] = 0.0
+                else:
+                    air[i] += m.opt.timestep
+            hmax = max(hmax, d.site("left_foot").xpos[2] - z0, d.site("right_foot").xpos[2] - z0)
+        if d.xmat[1].reshape(3, 3)[2, 2] < math.cos(math.radians(60)):
+            return "FELL"
+    durs = np.array(durs) if durs else np.zeros(1)
+    return (f"{len(durs) / T:.1f} lift-offs/s, airborne median {1000 * np.median(durs):.0f} ms "
+            f"(<50 ms: {100 * np.mean(durs < 0.05):.0f}%), max foot lift {1000 * hmax:.1f} mm")
 
 
 def runs(rig, cmd, T):
     out = []
     for rep in range(REPS):
-        rig.pol.current_lag = 1 + rep % 3
+        rig.delay.rng = np.random.default_rng(rep)
         rig.phase = np.random.default_rng(rep).random(14)
         out.append(rig.run(cmd, T))
     return out
@@ -147,7 +191,7 @@ def main():
         pd = arg.startswith("pd:")
         onnx = arg[3:] if pd else arg
         rig = Rig(onnx, pd=pd)
-        print(f"\n=== {onnx} [{'PD actuator' if pd else f"fw K={FW['K']:g} FF={FW['FF']:g} DB={FW['DB']:g}{'' if QUANT else ' noquant'}"}]   (mean ± std over {REPS} runs: lag 1..3, varied ADC phase)")
+        print(f"\n=== {onnx} [{'PD actuator' if pd else f"fw K={FW['K']:g} FF={FW['FF']:g} DB={FW['DB']:g}{'' if QUANT else ' noquant'}"}]   (mean ± std over {REPS} runs: 1–3 substep delay, varied ADC phase)")
         for c in CMDS:
             rs = runs(rig, c, 8.0)
             ok = [r for r in rs if "fell" not in r]
@@ -163,6 +207,7 @@ def main():
                   f"  pos err {err.mean():.2f} m  yaw={yaw.mean():+6.0f}±{yaw.std():3.0f}°"
                   f"  (ideal {ideal[0]:+.1f},{ideal[1]:+.1f}, yaw {math.degrees(c[2] * 8):+.0f}°)"
                   f"  hip_yaw {100 * np.mean([r['yaw_peak'] for r in ok]):.0f}%" + (f"  FELL {fell}/{REPS}" if fell else ""))
+        print(f"  stand foot detail: {foot_detail(rig)}")
         rs = [r for r in runs(rig, (0, 0, 0), 10.0) if "fell" not in r]
         if rs:
             print(f"  stand 10 s: {np.mean([r['lifts_per_s'] for r in rs]):.2f} foot lift-offs/s, "

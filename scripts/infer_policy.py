@@ -165,6 +165,31 @@ def _onnx_default_pose(path):
         return None
 
 
+class SubstepDelay:
+    """Command delay counted in PHYSICS steps, like mjlab's actuator DelayBuffer.
+
+    jduck trains with delay_min_lag=1, delay_max_lag=3 on the actuator, i.e. 1–3
+    physics steps (5–15 ms), resampled every physics step. PolicyInference's own
+    delay counts POLICY steps (20 ms), so the same "1 3" there means 20–60 ms,
+    which the jduck policies never saw and which made them oscillate at standstill.
+    Call once per physics step with the current target; returns the delayed one.
+    """
+
+    def __init__(self, min_lag=1, max_lag=3, seed=None):
+        self.min_lag, self.max_lag = min_lag, max_lag
+        self.rng = np.random.default_rng(seed)
+        self.buf = []
+
+    def reset(self):
+        self.buf = []
+
+    def __call__(self, target):
+        self.buf.append(np.array(target, copy=True))
+        del self.buf[:-(self.max_lag + 1)]
+        lag = min(int(self.rng.integers(self.min_lag, self.max_lag + 1)), len(self.buf) - 1)
+        return self.buf[-1 - lag]
+
+
 def jduck_fw_torque(q, qd, q_target, phase, fw):
     """UBT-12HC firmware law + DC motor, same as mjlab_microduck/actuator/ubt12hc.py."""
     k = JDUCK_RAD_PER_COUNT
@@ -1289,8 +1314,11 @@ def main():
             DEFAULT_POSE = onnx_home
         args.no_bam = True
         args.new_cmd_obs = True
+        # Training delays the actuator 1–3 PHYSICS steps (5–15 ms); that is
+        # replayed per physics step below (SubstepDelay), so the policy-step
+        # delay stays off unless asked for explicitly.
         if args.delay is None:
-            args.delay = [1, 3]
+            args.delay = [0]
         if args.scene is None:
             args.scene = JDUCK_XML
         if args.jduck_fw:
@@ -1475,6 +1503,12 @@ def main():
         model.actuator_biasprm[:, :3] = 0.0  # firmware law below drives the joints
         print(f"jduck servo: firmware law K={jduck_fw['K']:g} FF={jduck_fw['FF']:g} "
               f"DB={jduck_fw['DB']:g}, {jduck_fw['stall']} N·m, {jduck_fw['w0']} rad/s (same as training)")
+
+    jduck_delay = jduck_target = None
+    if args.robot == "jduck":
+        jduck_delay = SubstepDelay(1, 3)
+        jduck_target = data.ctrl[:len(policy.joint_qvel_indices)].copy()
+        print("jduck actuator delay: 1–3 physics steps (5–15 ms), resampled every step (same as training)")
 
     # Verify observation size
     test_obs = policy.get_observations()
@@ -1772,6 +1806,8 @@ def main():
                 if policy_enabled:
                     action = policy.infer()
                     policy.apply_action(action)
+                    if jduck_delay is not None:
+                        jduck_target = data.ctrl[:len(jduck_target)].copy()
                 else:
                     # Paused: keep last ctrl, don't query the policy. Motors
                     # hold position. Use a zero action just so downstream
@@ -1858,6 +1894,8 @@ def main():
                         print(f"  Applied ctrl ({ctrl_kind}, last 5):  {data.ctrl[-5:]}")
 
                 for _ in range(decimation):
+                    if jduck_delay is not None:
+                        data.ctrl[:len(jduck_target)] = jduck_delay(jduck_target)
                     if bam_ctrl is not None:
                         # BAM owns control/torque/friction: update() runs the
                         # firmware P-loop + DC-motor equation, writes the torque

@@ -98,6 +98,16 @@ JDUCK_STAND_JOINT_VEL_W = -0.01
 JDUCK_STAND_CONTACT_W = 1.0     # ≈ air_time's walking payoff, but for both feet down
 JDUCK_STAND_STILL_W = 1.0
 
+# Zero-command action-rate penalty (JDUCK_STAND_ACT_RATE=<w>, default 0 = off, so
+# older runs rebuild unchanged). ff0db0 stood "still" by the stand2 metrics but
+# kept moving its targets ~2–4°/step at zero command, even in its own training
+# env (and the jitter is in the policy: the same policy on PD jitters too, v0 on
+# the firmware law does not). stand2 pays for feet down and no drift, not for
+# quiet targets. Σ_joints (a_t − a_{t−1})² at that jitter is ~0.05, so w=20
+# costs ~1 per step, the size of one stand2 term; small balance corrections
+# (quadratic) stay cheap. Adds `_sar<w>` to the experiment name.
+JDUCK_STAND_ACT_RATE_W = float(os.environ.get("JDUCK_STAND_ACT_RATE", "0"))
+
 
 def randomize_ubt12hc(
     env,
@@ -171,6 +181,20 @@ def leg_joint_vel_l2_when_standing(
     return standing * torch.sum(asset.data.joint_vel[:, legs] ** 2, dim=-1)
 
 
+def action_rate_l2_when_standing(
+    env,
+    command_name: str = "twist",
+    command_threshold: float = 0.01,
+):
+    """Σ (a_t − a_{t−1})² over all actions, only while the twist command is ~0."""
+    import torch
+
+    cmd = env.command_manager.get_command(command_name)
+    standing = (torch.norm(cmd[:, :2], dim=1) + torch.abs(cmd[:, 2]) < command_threshold).float()
+    da = env.action_manager.action - env.action_manager.prev_action
+    return standing * torch.sum(da ** 2, dim=-1)
+
+
 def _clip_ranges(ranges, caps):
     return tuple(
         (max(lo, -c), min(hi, c)) for (lo, hi), c in zip(ranges, caps)
@@ -242,6 +266,13 @@ def make_jduck_velocity_env_cfg(
             params={"command_threshold": 0.01},
         )
 
+    if JDUCK_STAND_ACT_RATE_W > 0:
+        cfg.rewards["stand_action_rate"] = RewardTermCfg(
+            func=action_rate_l2_when_standing,
+            weight=-JDUCK_STAND_ACT_RATE_W,
+            params={"command_threshold": 0.01},
+        )
+
     head = deepcopy(cfg.commands["head_pose"])
     head.ranges = _clip_ranges(head.ranges, JDUCK_HEAD_CAPS)
     cfg.commands["head_pose"] = head
@@ -262,4 +293,6 @@ if JDUCK_STAND == "v1":
     JduckRlCfg.experiment_name += "_standpen"
 elif JDUCK_STAND == "v2":
     JduckRlCfg.experiment_name += "_stand2"
+if JDUCK_STAND_ACT_RATE_W > 0:
+    JduckRlCfg.experiment_name += f"_sar{JDUCK_STAND_ACT_RATE_W:g}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

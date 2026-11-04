@@ -76,9 +76,27 @@ JDUCK_SPEED_SCALE = (0.85, 1.15)
 #     keeps stepping, and it doesn't fire during push recovery.
 #   joint_vel_l2_when_standing: Σ leg qd² while standing. Stepping in place is
 #     O(10–50), so −0.01 is a noticeable but not dominant push.
-JDUCK_STAND_PENALTY = os.environ.get("JDUCK_STAND_PENALTY", "1") != "0"
+#
+# v1 got hacked: foot_step_penalty_when_standing only fires for an air phase
+# > 50 ms. final4000 stood with ~20 lift-offs/s of ~15 ms each (5 mm high,
+# unpenalized), which felt worse to drive than plain stepping.
+#
+# v2 (default) has no threshold to slip under:
+#   feet_contact_when_standing: +per-step fraction of feet on the ground while
+#     standing. Every 5 ms of air costs, however short.
+#   stillness_at_zero_command: exp(-|v_xy|²/0.1²) while standing → don't drift.
+#   leg_joint_vel_l2_when_standing: kept from v1 (continuous, no loophole).
+# JDUCK_STAND=v1 reproduces the old runs (_standpen), 0 disables (also accepts the
+# old JDUCK_STAND_PENALTY=0).
+JDUCK_STAND = os.environ.get("JDUCK_STAND", "v2")
+if os.environ.get("JDUCK_STAND_PENALTY") == "0":
+    JDUCK_STAND = "0"
+assert JDUCK_STAND in ("0", "v1", "v2"), JDUCK_STAND
+JDUCK_STAND_PENALTY = JDUCK_STAND != "0"
 JDUCK_STAND_STEP_W = -1.0
 JDUCK_STAND_JOINT_VEL_W = -0.01
+JDUCK_STAND_CONTACT_W = 1.0     # ≈ air_time's walking payoff, but for both feet down
+JDUCK_STAND_STILL_W = 1.0
 
 
 def randomize_ubt12hc(
@@ -109,6 +127,26 @@ def randomize_ubt12hc(
 
         act.set_scales(env_ids, torque_scale=u(*torque_range), speed_scale=u(*speed_range))
         act.reset_encoder_phase(env_ids)
+
+
+def feet_contact_when_standing(
+    env,
+    command_name: str = "twist",
+    command_threshold: float = 0.01,
+    sensor_name: str = "feet_ground_contact",
+):
+    """Fraction of feet (0, 0.5, 1) on the ground, only while the twist command is ~0.
+
+    Counted every step, so even a 5 ms hop off the ground costs. No air-time
+    threshold to slip under (see the v1 note above).
+    """
+    import torch
+
+    found = env.scene.sensors[sensor_name].data.found   # (N, 2) contact count per foot
+    on_ground = (found > 0).float().mean(dim=-1)
+    cmd = env.command_manager.get_command(command_name)
+    standing = (torch.norm(cmd[:, :2], dim=1) + torch.abs(cmd[:, 2]) < command_threshold).float()
+    return standing * on_ground
 
 
 def leg_joint_vel_l2_when_standing(
@@ -180,12 +218,24 @@ def make_jduck_velocity_env_cfg(
     cfg.rewards["track_linear_velocity"].params["std"] = JDUCK_LIN_STD
     cfg.rewards["track_angular_velocity"].params["std"] = JDUCK_ANG_STD
 
-    if JDUCK_STAND_PENALTY:
+    if JDUCK_STAND == "v1":
         cfg.rewards["stand_step_penalty"] = RewardTermCfg(
             func=microduck_mdp.foot_step_penalty_when_standing,
             weight=JDUCK_STAND_STEP_W,
             params={"command_threshold": 0.01, "body_vel_threshold": 0.2, "air_time_threshold": 0.05},
         )
+    if JDUCK_STAND == "v2":
+        cfg.rewards["stand_feet_contact"] = RewardTermCfg(
+            func=feet_contact_when_standing,
+            weight=JDUCK_STAND_CONTACT_W,
+            params={"command_threshold": 0.01},
+        )
+        cfg.rewards["stand_still"] = RewardTermCfg(
+            func=microduck_mdp.stillness_at_zero_command,
+            weight=JDUCK_STAND_STILL_W,
+            params={"command_threshold": 0.01, "vel_std": 0.1},
+        )
+    if JDUCK_STAND_PENALTY:
         cfg.rewards["stand_joint_vel"] = RewardTermCfg(
             func=leg_joint_vel_l2_when_standing,
             weight=JDUCK_STAND_JOINT_VEL_W,
@@ -208,6 +258,8 @@ JduckRlCfg.experiment_name = f"jduck_velocity_{JDUCK_ACTUATOR}"
 if JDUCK_ACTUATOR == "ubt12hc":
     JduckRlCfg.experiment_name += f"_{JDUCK_FW_TAG}"
 JduckRlCfg.experiment_name += f"_home{JDUCK_HOME}"
-if JDUCK_STAND_PENALTY:
+if JDUCK_STAND == "v1":
     JduckRlCfg.experiment_name += "_standpen"
+elif JDUCK_STAND == "v2":
+    JduckRlCfg.experiment_name += "_stand2"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

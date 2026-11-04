@@ -51,7 +51,9 @@ fi
 [[ "$exp" =~ _t([0-9.]+) ]] && envs+=("JDUCK_TORQUE=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _w([0-9.]+) ]] && envs+=("JDUCK_NOLOAD=${BASH_REMATCH[1]}")
 [[ "$exp" == *_noquant* ]] && envs+=("JDUCK_QUANT=0")
-[[ "$exp" == *_standpen* ]] || envs+=("JDUCK_STAND_PENALTY=0")
+if [[ "$exp" == *_stand2* ]]; then envs+=("JDUCK_STAND=v2")
+elif [[ "$exp" == *_standpen* ]]; then envs+=("JDUCK_STAND=v1")
+else envs+=("JDUCK_STAND=0"); fi
 
 out="${3:-jduck_${exp#jduck_velocity_}_$(basename "$run" | cut -c1-19)_it${it}.onnx}"
 out="${out//__/_}"

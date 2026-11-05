@@ -115,6 +115,16 @@ JDUCK_STAND_ACT_RATE_W = float(os.environ.get("JDUCK_STAND_ACT_RATE", "0"))
 JDUCK_SAR_START = int(os.environ.get("JDUCK_SAR_START", "1500"))
 JDUCK_SAR_RAMP = int(os.environ.get("JDUCK_SAR_RAMP", "500"))
 
+# Positive "quiet stand" reward (JDUCK_STAND_QUIET=<w>, default 0 = off):
+# standing · exp(−Σ(a_t − a_{t−1})² / JDUCK_STAND_QUIET_S2). The action-rate
+# PENALTY has a cliff: −5 stood still on seed 1 but jittered (1°/step) on seed 2,
+# and −7.5/−10 made standing net-negative, so the policy learned to fall (no
+# termination cost). A bounded positive term can't make dying attractive.
+# S2 = 0.005: ff0db0's jitter (Σ ≈ 0.04) earns e^−8 ≈ 0, ~0.1°/step-level
+# corrections (Σ ≈ 1e−4) keep ~98 %. Adds `_quiet<w>` to the experiment name.
+JDUCK_STAND_QUIET_W = float(os.environ.get("JDUCK_STAND_QUIET", "0"))
+JDUCK_STAND_QUIET_S2 = float(os.environ.get("JDUCK_STAND_QUIET_S2", "0.005"))
+
 # Yaw-rate tracking on a moving average (JDUCK_ANG_EMA=<tau s>, default 0 = the
 # stock instantaneous term). Measured on ff0db0_homeold walking at 0.2 m/s: mean
 # wz −0.15 rad/s but instantaneous (cmd − wz)² ≈ 7.7, because the trunk twists
@@ -242,6 +252,21 @@ class track_yaw_rate_ema:
         return torch.exp(-torch.square(cmd[:, 2] - self.ema) / std**2)
 
 
+def quiet_actions_when_standing(
+    env,
+    s2: float,
+    command_name: str = "twist",
+    command_threshold: float = 0.01,
+):
+    """exp(−Σ (a_t − a_{t−1})² / s2), only while the twist command is ~0."""
+    import torch
+
+    cmd = env.command_manager.get_command(command_name)
+    standing = (torch.norm(cmd[:, :2], dim=1) + torch.abs(cmd[:, 2]) < command_threshold).float()
+    da = env.action_manager.action - env.action_manager.prev_action
+    return standing * torch.exp(-torch.sum(da ** 2, dim=-1) / s2)
+
+
 def _clip_ranges(ranges, caps):
     return tuple(
         (max(lo, -c), min(hi, c)) for (lo, hi), c in zip(ranges, caps)
@@ -341,6 +366,13 @@ def make_jduck_velocity_env_cfg(
                 },
             )
 
+    if JDUCK_STAND_QUIET_W > 0:
+        cfg.rewards["stand_quiet"] = RewardTermCfg(
+            func=quiet_actions_when_standing,
+            weight=JDUCK_STAND_QUIET_W,
+            params={"s2": JDUCK_STAND_QUIET_S2, "command_threshold": 0.01},
+        )
+
     head = deepcopy(cfg.commands["head_pose"])
     head.ranges = _clip_ranges(head.ranges, JDUCK_HEAD_CAPS)
     cfg.commands["head_pose"] = head
@@ -365,6 +397,8 @@ if JDUCK_STAND_ACT_RATE_W > 0:
     JduckRlCfg.experiment_name += f"_sar{JDUCK_STAND_ACT_RATE_W:g}"
     if JDUCK_SAR_START > 0:
         JduckRlCfg.experiment_name += f"from{JDUCK_SAR_START}"
+if JDUCK_STAND_QUIET_W > 0:
+    JduckRlCfg.experiment_name += f"_quiet{JDUCK_STAND_QUIET_W:g}"
 if JDUCK_ANG_EMA > 0:
     JduckRlCfg.experiment_name += f"_angema{JDUCK_ANG_EMA:g}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

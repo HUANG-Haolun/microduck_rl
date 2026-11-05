@@ -59,6 +59,7 @@ if [[ "$exp" =~ _sar([0-9.]+)from([0-9]+) ]]; then
 elif [[ "$exp" =~ _sar([0-9.]+) ]]; then
     envs+=("JDUCK_STAND_ACT_RATE=${BASH_REMATCH[1]}" "JDUCK_SAR_START=0")
 fi
+[[ "$exp" =~ _quiet([0-9.]+) ]] && envs+=("JDUCK_STAND_QUIET=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _angema([0-9.]+) ]] && envs+=("JDUCK_ANG_EMA=${BASH_REMATCH[1]}")
 
 out="${3:-jduck_${exp#jduck_velocity_}_$(basename "$run" | cut -c1-19)_it${it}.onnx}"

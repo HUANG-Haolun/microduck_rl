@@ -98,6 +98,7 @@ class Rig:
         lifts = 0
         prev = self.contacts()
         yaw_peak = 0.0
+        yaw_acc, yaw_prev = 0.0, self._yaw()
         for k in range(int(T / 0.02)):
             with contextlib.redirect_stdout(io.StringIO()):
                 p.update_behavior(0.02)
@@ -122,6 +123,9 @@ class Rig:
             now = self.contacts()
             lifts += sum(a and not b for a, b in zip(prev, now))
             prev = now
+            y = self._yaw()   # unwrapped: a 367° turn must not read as +7°
+            yaw_acc += (y - yaw_prev + 180.0) % 360.0 - 180.0
+            yaw_prev = y
             for j in self.yaw_j:
                 # Fraction of the limit used on the side the joint is on (HOME = 0):
                 # 1.0 = sitting on the stop. The tight side is only ~20°.
@@ -130,10 +134,12 @@ class Rig:
                 yaw_peak = max(yaw_peak, q / hi if q > 0 else q / lo)
             if d.xmat[1].reshape(3, 3)[2, 2] < math.cos(math.radians(60)):
                 return dict(fell=k * 0.02)
-        q = d.qpos[self.fj + 3:self.fj + 7]
-        yaw = math.degrees(math.atan2(2 * (q[0] * q[3] + q[1] * q[2]), 1 - 2 * (q[2] ** 2 + q[3] ** 2)))
         dx = d.qpos[self.fj:self.fj + 2] - x0
-        return dict(dx=dx, yaw=yaw, lifts_per_s=lifts / T, yaw_peak=yaw_peak)
+        return dict(dx=dx, yaw=yaw_acc, lifts_per_s=lifts / T, yaw_peak=yaw_peak)
+
+    def _yaw(self):
+        q = self.d.qpos[self.fj + 3:self.fj + 7]
+        return math.degrees(math.atan2(2 * (q[0] * q[3] + q[1] * q[2]), 1 - 2 * (q[2] ** 2 + q[3] ** 2)))
 
 
 REPS = 4   # each command is run with different delay draws and ADC phases

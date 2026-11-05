@@ -125,6 +125,12 @@ JDUCK_SAR_RAMP = int(os.environ.get("JDUCK_SAR_RAMP", "500"))
 JDUCK_STAND_QUIET_W = float(os.environ.get("JDUCK_STAND_QUIET", "0"))
 JDUCK_STAND_QUIET_S2 = float(os.environ.get("JDUCK_STAND_QUIET_S2", "0.005"))
 
+# Termination penalty (JDUCK_TERM=<w>, default 0 = off): −w per fall (×dt like
+# every term). Without it a fall just ends the episode, so once the zero-command
+# terms make standing net-negative (sar ≥ 7.5) the policy learns to fall (r1, r4).
+# w=200 ≈ 2 s of the full positive stack. Adds `_term<w>` to the experiment name.
+JDUCK_TERM_W = float(os.environ.get("JDUCK_TERM", "0"))
+
 # Yaw-rate tracking on a moving average (JDUCK_ANG_EMA=<tau s>, default 0 = the
 # stock instantaneous term). Measured on ff0db0_homeold walking at 0.2 m/s: mean
 # wz −0.15 rad/s but instantaneous (cmd − wz)² ≈ 7.7, because the trunk twists
@@ -366,6 +372,11 @@ def make_jduck_velocity_env_cfg(
                 },
             )
 
+    if JDUCK_TERM_W > 0:
+        from mjlab.envs import mdp as mjlab_mdp
+
+        cfg.rewards["termination"] = RewardTermCfg(func=mjlab_mdp.is_terminated, weight=-JDUCK_TERM_W)
+
     if JDUCK_STAND_QUIET_W > 0:
         cfg.rewards["stand_quiet"] = RewardTermCfg(
             func=quiet_actions_when_standing,
@@ -399,6 +410,10 @@ if JDUCK_STAND_ACT_RATE_W > 0:
         JduckRlCfg.experiment_name += f"from{JDUCK_SAR_START}"
 if JDUCK_STAND_QUIET_W > 0:
     JduckRlCfg.experiment_name += f"_quiet{JDUCK_STAND_QUIET_W:g}"
+if JDUCK_STAND_QUIET_W > 0 and JDUCK_STAND_QUIET_S2 != 0.005:
+    JduckRlCfg.experiment_name += f"s{JDUCK_STAND_QUIET_S2:g}"
+if JDUCK_TERM_W > 0:
+    JduckRlCfg.experiment_name += f"_term{JDUCK_TERM_W:g}"
 if JDUCK_ANG_EMA > 0:
     JduckRlCfg.experiment_name += f"_angema{JDUCK_ANG_EMA:g}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

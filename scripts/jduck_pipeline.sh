@@ -23,4 +23,5 @@ onnx=jduck_$name.onnx
 scripts/jduck_export.sh "$d" "$last" "$onnx" 2>&1 | grep -E 'ONNX ok|训练环境|失败|键盘玩' >> "$out"
 JDUCK_EVAL_FW=16,0,0 env -u PYTHONPATH uv run --frozen python scripts/jduck_eval.py "$onnx" 2>&1 \
     | grep -v -E 'Warp|mdp\]|Vel cmd' >> "$out"
+env -u PYTHONPATH uv run --frozen python ../../jduck_tools/hw_chain_eval.py "$onnx" 2>&1 | grep -v -E 'Warp|mdp\]' >> "$out"
 echo "== done $(date +%F_%T)" >> "$out"

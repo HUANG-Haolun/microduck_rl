@@ -143,6 +143,18 @@ JDUCK_TERM_W = float(os.environ.get("JDUCK_TERM", "0"))
 # Adds `_adcobs` to the experiment name.
 JDUCK_OBS_ADC = os.environ.get("JDUCK_OBS_ADC", "0") == "1"
 
+# CAPS action-smoothness regularization in PPO (tasks/ppo_caps.py). With
+# JDUCK_OBS_ADC=1 the policy still jitters ~2°/step at zero command in its own
+# env (r9): reward terms cannot make the policy function insensitive to sensor
+# noise, so regularize the function directly.
+#   JDUCK_CAPS_S  spatial weight  (‖π(o) − π(o+ε)‖², ε ~ sensor noise), 0 = off
+#   JDUCK_CAPS_T  temporal weight (‖π(o_t) − π(o_t+1)‖²), 0 = off
+#   JDUCK_CAPS_STAND  extra weight on zero-command samples (default 4)
+# Adds `_capsS<s>T<t>[b<boost>]` to the experiment name.
+JDUCK_CAPS_S = float(os.environ.get("JDUCK_CAPS_S", "0"))
+JDUCK_CAPS_T = float(os.environ.get("JDUCK_CAPS_T", "0"))
+JDUCK_CAPS_STAND = float(os.environ.get("JDUCK_CAPS_STAND", "4"))
+
 # Yaw-rate tracking on a moving average (JDUCK_ANG_EMA=<tau s>, default 0 = the
 # stock instantaneous term). Measured on ff0db0_homeold walking at 0.2 m/s: mean
 # wz −0.15 rad/s but instantaneous (cmd − wz)² ≈ 7.7, because the trunk twists
@@ -527,4 +539,21 @@ if JDUCK_ANG_EMA > 0:
     JduckRlCfg.experiment_name += f"_angema{JDUCK_ANG_EMA:g}"
 if JDUCK_OBS_ADC:
     JduckRlCfg.experiment_name += "_adcobs"
+if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
+    from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
+    from dataclasses import dataclass as _dc
+
+    @_dc
+    class _PpoCapsCfg(_PpoCfg):
+        caps_spatial: float = 0.0
+        caps_temporal: float = 0.0
+        caps_stand_boost: float = 4.0
+
+    _a = JduckRlCfg.algorithm
+    JduckRlCfg.algorithm = _PpoCapsCfg(**{**vars(_a), "class_name": "mjlab_microduck.tasks.ppo_caps:PPOCaps",
+                                         "caps_spatial": JDUCK_CAPS_S, "caps_temporal": JDUCK_CAPS_T,
+                                         "caps_stand_boost": JDUCK_CAPS_STAND})
+    JduckRlCfg.experiment_name += f"_capsS{JDUCK_CAPS_S:g}T{JDUCK_CAPS_T:g}"
+    if JDUCK_CAPS_STAND != 4:
+        JduckRlCfg.experiment_name += f"b{JDUCK_CAPS_STAND:g}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

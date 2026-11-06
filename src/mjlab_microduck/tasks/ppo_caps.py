@@ -37,12 +37,14 @@ _SIGMA = (
 
 class PPOCaps(PPO):
     def __init__(self, *args, caps_spatial: float = 0.0, caps_temporal: float = 0.0,
-                 caps_stand_boost: float = 4.0, caps_steps: int = 4, caps_batch: int = 16384,
+                 caps_stand_boost: float = 4.0, caps_walk_weight: float = 1.0,
+                 caps_steps: int = 4, caps_batch: int = 16384,
                  caps_sigma_scale: float = 1.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.caps_spatial = caps_spatial
         self.caps_temporal = caps_temporal
         self.caps_stand_boost = caps_stand_boost
+        self.caps_walk_weight = caps_walk_weight
         self.caps_steps = caps_steps
         self.caps_batch = caps_batch
         self.caps_sigma = torch.tensor(_SIGMA, device=self.device) * caps_sigma_scale
@@ -60,7 +62,7 @@ class PPOCaps(PPO):
     def _weights(self, o: torch.Tensor) -> torch.Tensor:
         cmd = o[..., 48:51]
         standing = (cmd.abs().sum(-1) < 0.01).float()
-        return 1.0 + (self.caps_stand_boost - 1.0) * standing
+        return self.caps_walk_weight * (1.0 - standing) + self.caps_stand_boost * standing
 
     def _caps_update(self, obs: torch.Tensor, dones: torch.Tensor) -> dict[str, float]:
         from tensordict import TensorDict

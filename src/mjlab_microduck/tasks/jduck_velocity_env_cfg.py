@@ -165,6 +165,11 @@ JDUCK_QD_EMA = float(os.environ.get("JDUCK_QD_EMA", "1"))
 JDUCK_CAPS_S = float(os.environ.get("JDUCK_CAPS_S", "0"))
 JDUCK_CAPS_T = float(os.environ.get("JDUCK_CAPS_T", "0"))
 JDUCK_CAPS_STAND = float(os.environ.get("JDUCK_CAPS_STAND", "4"))
+# Weight on walking (nonzero command) samples, default 1. c1 (S=1, T=0.1, weight 1
+# everywhere) cut zero-speed jitter 10° → 0.46°/step but fell 3.4× more in training
+# (fell_over 0.86 vs 0.25, air_time 0.84 vs 1.04): smoothing the walking policy costs
+# balance. JDUCK_CAPS_WALK=0 regularizes only zero-command samples. Adds `w<val>`.
+JDUCK_CAPS_WALK = float(os.environ.get("JDUCK_CAPS_WALK", "1"))
 
 # Yaw-rate tracking on a moving average (JDUCK_ANG_EMA=<tau s>, default 0 = the
 # stock instantaneous term). Measured on ff0db0_homeold walking at 0.2 m/s: mean
@@ -568,12 +573,15 @@ if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
         caps_spatial: float = 0.0
         caps_temporal: float = 0.0
         caps_stand_boost: float = 4.0
+        caps_walk_weight: float = 1.0
 
     _a = JduckRlCfg.algorithm
     JduckRlCfg.algorithm = _PpoCapsCfg(**{**vars(_a), "class_name": "mjlab_microduck.tasks.ppo_caps:PPOCaps",
                                          "caps_spatial": JDUCK_CAPS_S, "caps_temporal": JDUCK_CAPS_T,
-                                         "caps_stand_boost": JDUCK_CAPS_STAND})
+                                         "caps_stand_boost": JDUCK_CAPS_STAND, "caps_walk_weight": JDUCK_CAPS_WALK})
     JduckRlCfg.experiment_name += f"_capsS{JDUCK_CAPS_S:g}T{JDUCK_CAPS_T:g}"
     if JDUCK_CAPS_STAND != 4:
         JduckRlCfg.experiment_name += f"b{JDUCK_CAPS_STAND:g}"
+    if JDUCK_CAPS_WALK != 1:
+        JduckRlCfg.experiment_name += f"w{JDUCK_CAPS_WALK:g}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

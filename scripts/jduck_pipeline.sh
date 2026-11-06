@@ -18,6 +18,21 @@ grep -a -E 'Mean episode length|fell_over|track_angular_velocity|stand_action_ra
 d=$(ls -td logs/rsl_rl/jduck_velocity*/*_"$name"/ 2>/dev/null | head -1)
 [ -n "$d" ] || { echo "no run dir" >> "$out"; exit 1; }
 echo "run: $d" >> "$out"
+env -u PYTHONPATH uv run --frozen python - "$d" >> "$out" 2>/dev/null <<'PY'
+import sys, glob, numpy as np
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+ea = EventAccumulator(sys.argv[1], size_guidance={"scalars": 0}); ea.Reload(); tags = ea.Tags()["scalars"]
+T = [("Train/mean_episode_length", "回合长度"), ("Episode_Termination/fell_over", "摔倒"),
+     ("Episode_Reward/air_time", "air_time"), ("Episode_Reward/track_linear_velocity", "线速度跟踪"),
+     ("Episode_Reward/track_angular_velocity", "角速度跟踪"), ("Episode_Reward/stand_quiet", "安静站立")]
+last = max(e.step for e in ea.Scalars("Train/mean_episode_length"))
+parts = []
+for t, n in T:
+    if t in tags:
+        v = [e.value for e in ea.Scalars(t) if e.step > last - 100]
+        parts.append(f"{n} {np.mean(v):.3f}")
+print("训练末期(最后100次): " + "  ".join(parts) + "   [参考 r9: 回合长度 971 摔倒 0.25 air_time 1.04]")
+PY
 last=$(( iters - 1 ))
 onnx=jduck_$name.onnx
 scripts/jduck_export.sh "$d" "$last" "$onnx" 2>&1 | grep -E 'ONNX ok|训练环境|失败|键盘玩' >> "$out"

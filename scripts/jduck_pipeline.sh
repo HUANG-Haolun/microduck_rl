@@ -8,7 +8,10 @@ name=$1; iters=${2:-4000}; shift 2; [ "${1:-}" = "--" ] && shift
 export PATH=$HOME/.local/bin:$PATH
 mkdir -p logs/pipeline
 out=logs/pipeline/$name.txt
-envs=(JDUCK_FW=16,0,0 JDUCK_NOLOAD=4.8 JDUCK_TORQUE=0.96 WANDB_MODE=offline "$@")
+envs=(JDUCK_FW=16,0,0 JDUCK_NOLOAD=4.8 JDUCK_TORQUE=0.96 WANDB_MODE=offline "$@")   # later JDUCK_FW wins
+fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p' | tail -1)
+K=${fw%%,*}
+ksweep=$(python3 -c "k=float('$K'); print(f'{k*0.75:g},{k*1.25:g}')")
 echo "== $name  $(date +%F_%T)  ${envs[*]}  iters=$iters seed=${SEED:-1}" > "$out"
 env -u PYTHONPATH "${envs[@]}" uv run --frozen train Mjlab-Velocity-Flat-JDuck --env.scene.num-envs 4096 \
     --agent.max_iterations "$iters" --agent.seed "${SEED:-1}" --agent.run-name "$name" \
@@ -36,7 +39,7 @@ PY
 last=$(( iters - 1 ))
 onnx=jduck_$name.onnx
 scripts/jduck_export.sh "$d" "$last" "$onnx" 2>&1 | grep -E 'ONNX ok|训练环境|失败|键盘玩' >> "$out"
-JDUCK_EVAL_FW=16,0,0 env -u PYTHONPATH uv run --frozen python scripts/jduck_eval.py "$onnx" 2>&1 \
+JDUCK_EVAL_FW=$fw env -u PYTHONPATH uv run --frozen python scripts/jduck_eval.py "$onnx" 2>&1 \
     | grep -v -E 'Warp|mdp\]|Vel cmd' >> "$out"
-env -u PYTHONPATH uv run --frozen python ../../jduck_tools/hw_chain_eval.py "$onnx" 2>&1 | grep -v -E 'Warp|mdp\]' >> "$out"
+env -u PYTHONPATH uv run --frozen python ../../jduck_tools/hw_chain_eval.py "$onnx" --fw "$fw" --k-sweep "$ksweep" 2>&1 | grep -v -E 'Warp|mdp\]' >> "$out"
 echo "== done $(date +%F_%T)" >> "$out"

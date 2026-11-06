@@ -16,6 +16,7 @@ Everything else (rewards, curricula, obs layout) is unchanged on purpose, so a
 run is directly comparable to Mjlab-Velocity-Flat-MicroDuck.
 """
 
+import math
 import os
 from copy import deepcopy
 
@@ -130,6 +131,17 @@ JDUCK_STAND_QUIET_S2 = float(os.environ.get("JDUCK_STAND_QUIET_S2", "0.005"))
 # terms make standing net-negative (sar ≥ 7.5) the policy learns to fall (r1, r4).
 # w=200 ≈ 2 s of the full positive stack. Adds `_term<w>` to the experiment name.
 JDUCK_TERM_W = float(os.environ.get("JDUCK_TERM", "0"))
+
+# Hardware-like joint observations (JDUCK_OBS_ADC=1, default 0 = off). On the
+# robot, jduck_run.py only has the servo ADC: q is quantized to 2π/1024 rad and qd
+# is (q_t − q_{t−1}) / 20 ms of those quantized readings (steps of ~0.31 rad/s).
+# Training fed the true q and qd (+ ±0.25 noise), and every policy trained that
+# way (r2, r7, r8) jittered at zero command once run through jduck_run.py +
+# sim_robot.py: 0.4–1.0°/step vs 0.02° in training. Isolated: finite-difference
+# qd is the main cause (0.016° → 3.1°), quantized q a small one (→ 0.17°).
+# With this on, the ACTOR sees exactly that; the critic keeps true q/qd.
+# Adds `_adcobs` to the experiment name.
+JDUCK_OBS_ADC = os.environ.get("JDUCK_OBS_ADC", "0") == "1"
 
 # Yaw-rate tracking on a moving average (JDUCK_ANG_EMA=<tau s>, default 0 = the
 # stock instantaneous term). Measured on ff0db0_homeold walking at 0.2 m/s: mean
@@ -273,6 +285,94 @@ def quiet_actions_when_standing(
     return standing * torch.exp(-torch.sum(da ** 2, dim=-1) / s2)
 
 
+class _AdcJointState:
+    """Per-env ADC encoder model shared by the two actor obs terms below.
+
+    Quantized q = floor(q_biased / k + phase) · k (phase: per-env per-joint random
+    offset, resampled at reset, like the ADC's arbitrary zero), and qd = Δq / dt of
+    those readings. Updated once per env step (cached by step counter).
+    """
+
+    K = 2 * math.pi / 1024
+
+    def __init__(self, env, joint_ids):
+        import torch
+
+        n = len(joint_ids)
+        self.ids = joint_ids
+        self.phase = torch.rand(env.num_envs, n, device=env.device)
+        self.prev = None
+        self.q = None
+        self.qd = torch.zeros(env.num_envs, n, device=env.device)
+        self.step = -1
+        self.fresh = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def update(self, env):
+        import torch
+
+        step = env.common_step_counter
+        if step == self.step and self.q is not None:
+            return
+        asset = env.scene["robot"]
+        raw = asset.data.joint_pos_biased[:, self.ids]
+        q = (torch.floor(raw / self.K + self.phase) - self.phase + 0.5) * self.K
+        if self.prev is None:
+            self.prev = q.clone()
+        qd = (q - self.prev) / env.step_dt
+        qd = torch.where(self.fresh[:, None], torch.zeros_like(qd), qd)
+        self.fresh[:] = False
+        self.prev, self.q, self.qd, self.step = q, q, qd, step
+
+    def reset(self, env_ids):
+        import torch
+
+        if env_ids is None or isinstance(env_ids, slice):
+            env_ids = torch.arange(self.phase.shape[0], device=self.phase.device)
+        self.phase[env_ids] = torch.rand(len(env_ids), self.phase.shape[1], device=self.phase.device)
+        self.fresh[env_ids] = True
+        self.step = -1   # force a refresh so the reset envs get a new reading
+
+
+_ADC_STATE = {}
+
+
+def _adc_state(env, asset_cfg):
+    key = id(env)
+    if key not in _ADC_STATE:
+        _ADC_STATE[key] = _AdcJointState(env, asset_cfg.joint_ids)
+    return _ADC_STATE[key]
+
+
+class joint_pos_adc:
+    """Actor joint_pos as the robot reads it: ADC-quantized, relative to HOME."""
+
+    def __init__(self, cfg, env):
+        self.state = _adc_state(env, cfg.params["asset_cfg"])
+
+    def reset(self, env_ids=None):
+        self.state.reset(env_ids)
+
+    def __call__(self, env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"), biased: bool = True):
+        del biased
+        self.state.update(env)
+        default = env.scene["robot"].data.default_joint_pos[:, asset_cfg.joint_ids]
+        return self.state.q - default
+
+
+class joint_vel_adc:
+    """Actor joint_vel as jduck_run.py computes it: Δ(quantized q) / 20 ms."""
+
+    def __init__(self, cfg, env):
+        self.state = _adc_state(env, cfg.params["asset_cfg"])
+
+    def reset(self, env_ids=None):
+        self.state.reset(env_ids)
+
+    def __call__(self, env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+        self.state.update(env)
+        return self.state.qd
+
+
 def _clip_ranges(ranges, caps):
     return tuple(
         (max(lo, -c), min(hi, c)) for (lo, hi), c in zip(ranges, caps)
@@ -384,6 +484,15 @@ def make_jduck_velocity_env_cfg(
             params={"s2": JDUCK_STAND_QUIET_S2, "command_threshold": 0.01},
         )
 
+    if JDUCK_OBS_ADC:
+        a = cfg.observations["actor"].terms
+        a["joint_pos"].func = joint_pos_adc
+        a["joint_pos"].noise = None          # the quantization IS the noise
+        a["joint_vel"].func = joint_vel_adc
+        a["joint_vel"].noise = None
+        a["joint_vel"].delay_min_lag = 0     # Δq/dt is already the last 20 ms average
+        a["joint_vel"].delay_max_lag = 0
+
     head = deepcopy(cfg.commands["head_pose"])
     head.ranges = _clip_ranges(head.ranges, JDUCK_HEAD_CAPS)
     cfg.commands["head_pose"] = head
@@ -416,4 +525,6 @@ if JDUCK_TERM_W > 0:
     JduckRlCfg.experiment_name += f"_term{JDUCK_TERM_W:g}"
 if JDUCK_ANG_EMA > 0:
     JduckRlCfg.experiment_name += f"_angema{JDUCK_ANG_EMA:g}"
+if JDUCK_OBS_ADC:
+    JduckRlCfg.experiment_name += "_adcobs"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

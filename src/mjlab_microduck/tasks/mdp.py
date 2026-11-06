@@ -100,6 +100,8 @@ def _get_base_metadata_no_passive(env, run_path):
         "action_scale": joint_action._scale[0].cpu().tolist()
         if isinstance(joint_action._scale, torch.Tensor)
         else joint_action._scale,
+        # jduck_run.py reads this to filter qd the way training did (1 = raw Δq/dt)
+        "jduck_qd_ema": float(__import__("os").environ.get("JDUCK_QD_EMA", "1")),
     }
 
 _exporter_utils.get_base_metadata = _get_base_metadata_no_passive

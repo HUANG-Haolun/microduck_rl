@@ -142,6 +142,13 @@ JDUCK_TERM_W = float(os.environ.get("JDUCK_TERM", "0"))
 # With this on, the ACTOR sees exactly that; the critic keeps true q/qd.
 # Adds `_adcobs` to the experiment name.
 JDUCK_OBS_ADC = os.environ.get("JDUCK_OBS_ADC", "0") == "1"
+# qd low-pass for the ADC obs (JDUCK_QD_EMA=<alpha>, default 1 = raw Δq/dt): the
+# actor sees qd_f += alpha·(Δq/dt − qd_f), and jduck_run.py must apply the same
+# filter (it reads it from the ONNX metadata key "jduck_qd_ema"). Measured on r9 in
+# the hw chain: holding qd constant at zero command drops the jitter 10.9 → 0.16°/step
+# while freezing gyro, gravity or q makes it fall, so the oscillation runs through
+# the quantized-velocity input. Adds `_qdema<alpha>` to the experiment name.
+JDUCK_QD_EMA = float(os.environ.get("JDUCK_QD_EMA", "1"))
 
 # CAPS action-smoothness regularization in PPO (tasks/ppo_caps.py). With
 # JDUCK_OBS_ADC=1 the policy still jitters ~2°/step at zero command in its own
@@ -330,8 +337,10 @@ class _AdcJointState:
         q = (torch.floor(raw / self.K + self.phase) - self.phase + 0.5) * self.K
         if self.prev is None:
             self.prev = q.clone()
-        qd = (q - self.prev) / env.step_dt
-        qd = torch.where(self.fresh[:, None], torch.zeros_like(qd), qd)
+        raw = (q - self.prev) / env.step_dt
+        raw = torch.where(self.fresh[:, None], torch.zeros_like(raw), raw)
+        qd_prev = torch.where(self.fresh[:, None], torch.zeros_like(raw), self.qd)
+        qd = qd_prev + JDUCK_QD_EMA * (raw - qd_prev)
         self.fresh[:] = False
         self.prev, self.q, self.qd, self.step = q, q, qd, step
 
@@ -539,6 +548,8 @@ if JDUCK_ANG_EMA > 0:
     JduckRlCfg.experiment_name += f"_angema{JDUCK_ANG_EMA:g}"
 if JDUCK_OBS_ADC:
     JduckRlCfg.experiment_name += "_adcobs"
+    if JDUCK_QD_EMA != 1:
+        JduckRlCfg.experiment_name += f"_qdema{JDUCK_QD_EMA:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

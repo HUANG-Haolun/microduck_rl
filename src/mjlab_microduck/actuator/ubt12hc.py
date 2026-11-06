@@ -68,6 +68,10 @@ class Ubt12hcActuator(IdealPdActuator[Ubt12hcActuatorCfg]):
         shape = (data.nworld, len(self._target_names))
         self.torque_scale = torch.ones(shape, dtype=torch.float, device=device)
         self.speed_scale = torch.ones(shape, dtype=torch.float, device=device)
+        # Per-env, per-joint multiplier on pwm_per_count (the firmware KP): real
+        # servos differ, and v0 showed how narrow the stable band is (it stood still
+        # with kp=8 and stepped in place with kp=9.8, same damping).
+        self.kp_scale = torch.ones(shape, dtype=torch.float, device=device)
         # Per-env, per-joint encoder phase in [0, 1) counts: where the integer ADC
         # boundaries fall relative to the sim's continuous angle.
         self.adc_phase = torch.rand(shape, dtype=torch.float, device=device)
@@ -82,7 +86,7 @@ class Ubt12hcActuator(IdealPdActuator[Ubt12hcActuatorCfg]):
         else:
             err = (cmd.position_target - cmd.pos) / k
 
-        mag = torch.clamp(err.abs() * c.pwm_per_count + c.pwm_ff, c.pwm_min, c.pwm_max)
+        mag = torch.clamp(err.abs() * c.pwm_per_count * self.kp_scale + c.pwm_ff, c.pwm_min, c.pwm_max)
         pwm = torch.where(err.abs() <= c.deadband_counts, torch.zeros_like(mag), mag)
         duty = torch.sign(err) * pwm / 255.0
 
@@ -94,7 +98,9 @@ class Ubt12hcActuator(IdealPdActuator[Ubt12hcActuatorCfg]):
         torque = torch.where(pwm == 0, torch.zeros_like(torque), torque)
         return torch.clamp(torque, -tau_stall, tau_stall)
 
-    def set_scales(self, env_ids, torque_scale=None, speed_scale=None) -> None:
+    def set_scales(self, env_ids, torque_scale=None, speed_scale=None, kp_scale=None) -> None:
+        if kp_scale is not None:
+            self.kp_scale[env_ids] = kp_scale
         if torque_scale is not None:
             self.torque_scale[env_ids] = torque_scale
         if speed_scale is not None:

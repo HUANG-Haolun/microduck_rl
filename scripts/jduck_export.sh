@@ -66,6 +66,7 @@ fi
 [[ "$exp" =~ _qdema([0-9.]+) ]] && envs+=("JDUCK_QD_EMA=${BASH_REMATCH[1]}")
 if [[ "$exp" =~ _capsS([0-9.]+)T([0-9.]+) ]]; then envs+=("JDUCK_CAPS_S=${BASH_REMATCH[1]}" "JDUCK_CAPS_T=${BASH_REMATCH[2]}"); fi
 [[ "$exp" =~ _capsS[0-9.]+T[0-9.]+b([0-9.]+) ]] && envs+=("JDUCK_CAPS_STAND=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _kpdr([0-9.]+)-([0-9.]+) ]] && envs+=("JDUCK_KP_DR=${BASH_REMATCH[1]},${BASH_REMATCH[2]}")
 [[ "$exp" =~ _angema([0-9.]+) ]] && envs+=("JDUCK_ANG_EMA=${BASH_REMATCH[1]}")
 
 out="${3:-jduck_${exp#jduck_velocity_}_$(basename "$run" | cut -c1-19)_it${it}.onnx}"

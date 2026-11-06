@@ -65,6 +65,10 @@ JDUCK_HEAD_CAPS = (1.10, 1.10, 0.60, 0.26)
 # tolerance. Re-centre on the bench-measured value once identified.
 JDUCK_TORQUE_SCALE = (0.80, 1.15)
 JDUCK_SPEED_SCALE = (0.85, 1.15)
+# Firmware KP spread (JDUCK_KP_DR=<lo>,<hi> as a multiplier on K, default off).
+# e.g. 0.75,1.25 → K=16 trains on K∈[12, 20]. Adds `_kpdr<lo>-<hi>` to the name.
+_kp = os.environ.get("JDUCK_KP_DR", "")
+JDUCK_KP_SCALE = tuple(float(x) for x in _kp.split(",")) if _kp else None
 
 # Standing-still penalties (JDUCK_STAND_PENALTY=0 disables). The ubt12hc runs
 # step in place at zero command (4–6 lift-offs/s in scripts/jduck_eval.py), while
@@ -178,6 +182,7 @@ def randomize_ubt12hc(
     env_ids,
     torque_range: tuple[float, float],
     speed_range: tuple[float, float],
+    kp_range: tuple[float, float] | None = None,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
 ):
     """Per-episode stall-torque / no-load-speed scale + encoder phase for the
@@ -199,7 +204,8 @@ def randomize_ubt12hc(
             # per-joint: servos differ from each other
             return torch.rand(len(env_ids), n, device=env.device) * (hi - lo) + lo
 
-        act.set_scales(env_ids, torque_scale=u(*torque_range), speed_scale=u(*speed_range))
+        act.set_scales(env_ids, torque_scale=u(*torque_range), speed_scale=u(*speed_range),
+                       kp_scale=u(*kp_range) if kp_range else None)
         act.reset_encoder_phase(env_ids)
 
 
@@ -423,7 +429,8 @@ def make_jduck_velocity_env_cfg(
         cfg.events["randomize_ubt12hc"] = EventTermCfg(
             func=randomize_ubt12hc,
             mode="reset",
-            params={"torque_range": JDUCK_TORQUE_SCALE, "speed_range": JDUCK_SPEED_SCALE},
+            params={"torque_range": JDUCK_TORQUE_SCALE, "speed_range": JDUCK_SPEED_SCALE,
+                    "kp_range": JDUCK_KP_SCALE},
         )
 
     twist = deepcopy(cfg.commands["twist"])
@@ -550,6 +557,8 @@ if JDUCK_OBS_ADC:
     JduckRlCfg.experiment_name += "_adcobs"
     if JDUCK_QD_EMA != 1:
         JduckRlCfg.experiment_name += f"_qdema{JDUCK_QD_EMA:g}"
+if JDUCK_KP_SCALE:
+    JduckRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

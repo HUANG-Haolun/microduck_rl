@@ -176,6 +176,10 @@ JDUCK_CAPS_STAND = float(os.environ.get("JDUCK_CAPS_STAND", "4"))
 # (fell_over 0.86 vs 0.25, air_time 0.84 vs 1.04): smoothing the walking policy costs
 # balance. JDUCK_CAPS_WALK=0 regularizes only zero-command samples. Adds `w<val>`.
 JDUCK_CAPS_WALK = float(os.environ.get("JDUCK_CAPS_WALK", "1"))
+# Standing samples are smoothed only while the trunk is calm (|gyro| < JDUCK_CAPS_CALM
+# rad/s; 0 = always). Standing-only CAPS still fell 3× more than no CAPS (L1 0.78, L2
+# 0.64 vs p8 0.13): a pushed robot at zero command needs fast corrections. Adds `c<val>`.
+JDUCK_CAPS_CALM = float(os.environ.get("JDUCK_CAPS_CALM", "0"))
 
 # Yaw-rate tracking on a moving average (JDUCK_ANG_EMA=<tau s>, default 0 = the
 # stock instantaneous term). Measured on ff0db0_homeold walking at 0.2 m/s: mean
@@ -584,14 +588,18 @@ if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
         caps_temporal: float = 0.0
         caps_stand_boost: float = 4.0
         caps_walk_weight: float = 1.0
+        caps_calm: float = 0.0
 
     _a = JduckRlCfg.algorithm
     JduckRlCfg.algorithm = _PpoCapsCfg(**{**vars(_a), "class_name": "mjlab_microduck.tasks.ppo_caps:PPOCaps",
                                          "caps_spatial": JDUCK_CAPS_S, "caps_temporal": JDUCK_CAPS_T,
-                                         "caps_stand_boost": JDUCK_CAPS_STAND, "caps_walk_weight": JDUCK_CAPS_WALK})
+                                         "caps_stand_boost": JDUCK_CAPS_STAND, "caps_walk_weight": JDUCK_CAPS_WALK,
+                                         "caps_calm": JDUCK_CAPS_CALM})
     JduckRlCfg.experiment_name += f"_capsS{JDUCK_CAPS_S:g}T{JDUCK_CAPS_T:g}"
     if JDUCK_CAPS_STAND != 4:
         JduckRlCfg.experiment_name += f"b{JDUCK_CAPS_STAND:g}"
     if JDUCK_CAPS_WALK != 1:
         JduckRlCfg.experiment_name += f"w{JDUCK_CAPS_WALK:g}"
+    if JDUCK_CAPS_CALM > 0:
+        JduckRlCfg.experiment_name += f"c{JDUCK_CAPS_CALM:g}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

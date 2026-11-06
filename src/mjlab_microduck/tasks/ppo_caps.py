@@ -37,7 +37,7 @@ _SIGMA = (
 
 class PPOCaps(PPO):
     def __init__(self, *args, caps_spatial: float = 0.0, caps_temporal: float = 0.0,
-                 caps_stand_boost: float = 4.0, caps_walk_weight: float = 1.0,
+                 caps_stand_boost: float = 4.0, caps_walk_weight: float = 1.0, caps_calm: float = 0.0,
                  caps_steps: int = 4, caps_batch: int = 16384,
                  caps_sigma_scale: float = 1.0, **kwargs):
         super().__init__(*args, **kwargs)
@@ -45,6 +45,7 @@ class PPOCaps(PPO):
         self.caps_temporal = caps_temporal
         self.caps_stand_boost = caps_stand_boost
         self.caps_walk_weight = caps_walk_weight
+        self.caps_calm = caps_calm
         self.caps_steps = caps_steps
         self.caps_batch = caps_batch
         self.caps_sigma = torch.tensor(_SIGMA, device=self.device) * caps_sigma_scale
@@ -62,6 +63,10 @@ class PPOCaps(PPO):
     def _weights(self, o: torch.Tensor) -> torch.Tensor:
         cmd = o[..., 48:51]
         standing = (cmd.abs().sum(-1) < 0.01).float()
+        if self.caps_calm > 0:
+            # only calm standing: after a push the body rotates and the policy must react
+            # fast. Gyro (obs 0:3) above caps_calm rad/s → no smoothing on that sample.
+            standing = standing * (o[..., 0:3].norm(dim=-1) < self.caps_calm).float()
         return self.caps_walk_weight * (1.0 - standing) + self.caps_stand_boost * standing
 
     def _caps_update(self, obs: torch.Tensor, dones: torch.Tensor) -> dict[str, float]:

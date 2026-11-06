@@ -153,6 +153,12 @@ JDUCK_OBS_ADC = os.environ.get("JDUCK_OBS_ADC", "0") == "1"
 # while freezing gyro, gravity or q makes it fall, so the oscillation runs through
 # the quantized-velocity input. Adds `_qdema<alpha>` to the experiment name.
 JDUCK_QD_EMA = float(os.environ.get("JDUCK_QD_EMA", "1"))
+# 1-policy-step lag on the ADC joint obs (JDUCK_OBS_LAG=1). jduck_run.py builds the obs
+# from the replies to LAST tick's CMD 0x01, so q (and qd from it) is ~20 ms old on the
+# robot, while training fed this tick's reading. Through the hw chain, policies that walk
+# straight with fresh obs (p10: dx +4.4 m, yaw ≈ 0) veer and spin with the stale ones
+# (dx −0.4…+1.6 m, yaw −50…−240°). Adds `_lag1`.
+JDUCK_OBS_LAG = int(os.environ.get("JDUCK_OBS_LAG", "0"))
 
 # CAPS action-smoothness regularization in PPO (tasks/ppo_caps.py). With
 # JDUCK_OBS_ADC=1 the policy still jitters ~2°/step at zero command in its own
@@ -523,8 +529,10 @@ def make_jduck_velocity_env_cfg(
         a["joint_pos"].noise = None          # the quantization IS the noise
         a["joint_vel"].func = joint_vel_adc
         a["joint_vel"].noise = None
-        a["joint_vel"].delay_min_lag = 0     # Δq/dt is already the last 20 ms average
-        a["joint_vel"].delay_max_lag = 0
+        a["joint_vel"].delay_min_lag = JDUCK_OBS_LAG   # Δq/dt is already the last 20 ms average
+        a["joint_vel"].delay_max_lag = JDUCK_OBS_LAG
+        a["joint_pos"].delay_min_lag = JDUCK_OBS_LAG
+        a["joint_pos"].delay_max_lag = JDUCK_OBS_LAG
 
     head = deepcopy(cfg.commands["head_pose"])
     head.ranges = _clip_ranges(head.ranges, JDUCK_HEAD_CAPS)
@@ -562,6 +570,8 @@ if JDUCK_OBS_ADC:
     JduckRlCfg.experiment_name += "_adcobs"
     if JDUCK_QD_EMA != 1:
         JduckRlCfg.experiment_name += f"_qdema{JDUCK_QD_EMA:g}"
+    if JDUCK_OBS_LAG:
+        JduckRlCfg.experiment_name += f"_lag{JDUCK_OBS_LAG}"
 if JDUCK_KP_SCALE:
     JduckRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:

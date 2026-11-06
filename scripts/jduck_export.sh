@@ -64,6 +64,7 @@ fi
 [[ "$exp" =~ _term([0-9.]+) ]] && envs+=("JDUCK_TERM=${BASH_REMATCH[1]}")
 [[ "$exp" == *_adcobs* ]] && envs+=("JDUCK_OBS_ADC=1")
 [[ "$exp" =~ _qdema([0-9.]+) ]] && envs+=("JDUCK_QD_EMA=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _lag([0-9]+) ]] && envs+=("JDUCK_OBS_LAG=${BASH_REMATCH[1]}")
 if [[ "$exp" =~ _capsS([0-9.]+)T([0-9.]+) ]]; then envs+=("JDUCK_CAPS_S=${BASH_REMATCH[1]}" "JDUCK_CAPS_T=${BASH_REMATCH[2]}"); fi
 [[ "$exp" =~ _capsS[0-9.]+T[0-9.]+(b[0-9.]+)?w([0-9.]+) ]] && envs+=("JDUCK_CAPS_WALK=${BASH_REMATCH[2]}")
 [[ "$exp" =~ _capsS[0-9.]+T[0-9.]+b([0-9.]+) ]] && envs+=("JDUCK_CAPS_STAND=${BASH_REMATCH[1]}")

@@ -167,3 +167,53 @@ if JDUCK_KP_SCALE:
     JduckStandUpRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
 JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name
 JduckStandUpRlCfg.max_iterations = 6000
+
+
+# ── Height rewards gated on being upright ────────────────────────────────────
+# jduck's head is long (trunk origin → head top 118 mm, head+neck 36 % of the mass): tipped
+# 70° forward onto its head (a "head tripod"), the trunk sits at 0.13 m — the STANDING
+# height. jsu1 (5000 it) parked there from every fallen start: 0 % upright from face down /
+# up / side, while height_stand paid 0.78 of 1. On microduck a head-down pose is far below
+# standing height, so its height terms never had to care about tilt. Multiplying them by an
+# upright gate (1 below 25° tilt → 0 at 50°) makes the tripod worth nothing.
+def _upright_gate(env, full_deg: float = 25.0, zero_deg: float = 50.0):
+    import torch
+
+    g = env.scene["robot"].data.projected_gravity_b[:, 2]
+    tilt = torch.rad2deg(torch.arccos(torch.clamp(-g, -1.0, 1.0)))
+    return torch.clamp((zero_deg - tilt) / (zero_deg - full_deg), 0.0, 1.0)
+
+
+def height_target_gaussian_upright(env, target_height: float, std: float = 0.02, asset_cfg=None, **kw):
+    return microduck_mdp.height_target_gaussian(env, target_height=target_height, std=std) * _upright_gate(env)
+
+
+def height_l1_penalty_upright(env, target_height: float, asset_cfg=None, **kw):
+    # a cost: keep it at its full (negative) value when tilted, so lying on the head
+    # is charged the full distance to standing instead of being treated as "arrived"
+    import torch
+
+    asset = env.scene["robot"]
+    z = torch.nan_to_num(asset.data.root_link_pos_w[:, 2] - env.scene.terrain.env_origins[:, 2], nan=0.0)
+    gate = _upright_gate(env)
+    return -(gate * torch.abs(z - target_height) + (1 - gate) * target_height)
+
+
+JDUCK_GATE_HEIGHT = os.environ.get("JDUCK_GATE_HEIGHT", "1") == "1"
+_make_orig = make_jduck_standup_env_cfg
+
+
+def make_jduck_standup_env_cfg(play: bool = False, rough: bool = False):   # noqa: F811
+    cfg = _make_orig(play=play, rough=rough)
+    if JDUCK_GATE_HEIGHT:
+        for name in ("height_stand", "height_stand_sharp"):
+            if name in cfg.rewards:
+                cfg.rewards[name].func = height_target_gaussian_upright
+        if "height_stand_l1" in cfg.rewards:
+            cfg.rewards["height_stand_l1"].func = height_l1_penalty_upright
+    return cfg
+
+
+if JDUCK_GATE_HEIGHT:
+    JduckStandUpRlCfg.experiment_name += "_hgate"
+    JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name

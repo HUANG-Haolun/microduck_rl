@@ -45,6 +45,7 @@ Obs-contract dependencies (61D actor obs, see AGENTS.md): projected gravity at
 
 from __future__ import annotations
 
+import math
 import copy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -271,7 +272,14 @@ class PpoWithExpertBc(PPO):
         flat = torch.cat([obs_td[g] for g in groups], dim=-1)
         gsl = tuple(cfg["gravity_slice"])
         fallen = fallen_mask_from_obs(flat, gsl, cfg["gate_tilt_deg"])
+        if cfg.get("pose_gate"):
+            # jduck: the get-up passes through a deep crouch at < 25° tilt, which the tilt gate alone
+            # hands to the walk anchor. Frames whose leg joints are far from HOME go to the expert.
+            pg = cfg["pose_gate"]
+            q = flat[:, pg["slice"][0]:pg["slice"][1]][:, list(pg["cols"])]
+            fallen = fallen | (q.abs().amax(dim=1) > pg["thresh"])
         upright = ~fallen_mask_from_obs(flat, gsl, cfg["anchor_tilt_deg"]) if self.anchor is not None else torch.zeros_like(fallen)
+        upright = upright & ~fallen
         body_teach = torch.zeros_like(fallen)
         if cfg.get("body_slice") is not None:
             body_frames, body_teach = body_frame_masks(flat, tuple(cfg["twist_slice"]), tuple(cfg["body_slice"]),
@@ -337,4 +345,15 @@ class PpoWithExpertBc(PPO):
         loss_dict = super().update()
         if self.expert is not None:
             loss_dict.update(self._bc_update())
+        cap = (self.bc_cfg or {}).get("max_action_std")
+        if cap:
+            # jduck: its get-up fails under ~0.03 rad of action noise, and PPO's std grew to 0.39
+            # in VelStand (stand-up teacher trained at 0.12) → noisy rollouts never stand up and
+            # the policy learned to lie still. Cap the exploration std.
+            d = getattr(self.actor, "distribution", None)
+            with torch.no_grad():
+                if d is not None and hasattr(d, "std_param"):
+                    d.std_param.clamp_(max=cap)
+                elif d is not None and hasattr(d, "log_std_param"):
+                    d.log_std_param.clamp_(max=math.log(cap))
         return loss_dict

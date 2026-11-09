@@ -32,6 +32,16 @@ _JDUCK_DIR = Path(
 )
 JDUCK_WALK_XML: Path = _JDUCK_DIR / "robot_walk.xml"
 JDUCK_SCENE_XML: Path = _JDUCK_DIR / "scene_walk.xml"
+# Same robot + floor-colliding meshes on torso, hip-pitch, knee and head links
+# (build_mjcf.py). For tasks where the body touches the ground (sit/stand, falls).
+JDUCK_GROUNDCONTACT_XML: Path = _JDUCK_DIR / "robot_groundcontact.xml"
+
+
+def get_jduck_groundcontact_spec() -> mujoco.MjSpec:
+    assert JDUCK_GROUNDCONTACT_XML.exists(), (
+        f"jduck MJCF not found: {JDUCK_GROUNDCONTACT_XML} — run jduck_mjcf/build_mjcf.py"
+    )
+    return mujoco.MjSpec.from_file(str(JDUCK_GROUNDCONTACT_XML))
 
 
 def get_jduck_walk_spec() -> mujoco.MjSpec:
@@ -91,6 +101,18 @@ JDUCK_COLLISION = CollisionCfg(
     condim={r"^(left|right)_foot_collision$": 3},
     priority={r"^(left|right)_foot_collision$": 1},
     friction={r"^(left|right)_foot_collision$": (1.0,)},
+)
+
+# Feet as in JDUCK_COLLISION, plus the body's floor-contact meshes. Self-collision
+# meshes (`*_self_collision`, contype 2) are kept as they are in the XML.
+JDUCK_GROUNDCONTACT_COLLISION = CollisionCfg(
+    geom_names_expr=[".*_foot_collision", ".*_ground_collision"],
+    contype={r".*_foot_collision$": 1, r".*_ground_collision$": 1},
+    conaffinity={r".*_foot_collision$": 1, r".*_ground_collision$": 1},
+    condim={r"^(left|right)_foot_collision$": 3, r".*_ground_collision$": 3},
+    priority={r"^(left|right)_foot_collision$": 1},
+    friction={r"^(left|right)_foot_collision$": (1.0,), r".*_ground_collision$": (0.8,)},
+    disable_other_geoms=False,
 )
 
 _SERVO_JOINTS = (r"^(?!passive_|trunk_base_freejoint$).*",)
@@ -163,6 +185,17 @@ JDUCK_WALK_ROBOT_CFG = EntityCfg(
     spec_fn=get_jduck_walk_spec,
     init_state=JDUCK_HOME_FRAME,
     collisions=(JDUCK_COLLISION,),
+    articulation=EntityArticulationInfoCfg(
+        actuators=(jduck_actuators,),
+        soft_joint_pos_limit_factor=0.9,
+    ),
+)
+
+# For sit/stand and other ground-contact tasks: same actuator, body collides with the floor.
+JDUCK_GROUNDCONTACT_ROBOT_CFG = EntityCfg(
+    spec_fn=get_jduck_groundcontact_spec,
+    init_state=JDUCK_HOME_FRAME,
+    collisions=(JDUCK_GROUNDCONTACT_COLLISION,),
     articulation=EntityArticulationInfoCfg(
         actuators=(jduck_actuators,),
         soft_joint_pos_limit_factor=0.9,

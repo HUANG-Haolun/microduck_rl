@@ -108,3 +108,19 @@ def test_jduck_staged_action_rate_and_yaw_ema():
     assert stages == "[0.0, -2.5, -5.0, -10.0]"
     assert ang == "track_yaw_rate_ema 2.0"
     assert name.endswith("_sar10from1500_angema0.5")
+
+
+def test_groundcontact_model_matches_walk_model():
+    """robot_groundcontact.xml = robot_walk.xml + floor-colliding body meshes; same joints and mass."""
+    from mjlab_microduck.robot.jduck_constants import get_jduck_groundcontact_spec
+
+    w = _model()
+    g = get_jduck_groundcontact_spec().compile()
+    names = lambda m, t, n: [mujoco.mj_id2name(m, t, i) for i in range(n)]
+    assert names(w, mujoco.mjtObj.mjOBJ_JOINT, w.njnt) == names(g, mujoco.mjtObj.mjOBJ_JOINT, g.njnt)
+    assert abs(w.body_subtreemass[1] - g.body_subtreemass[1]) < 1e-9
+    floor_geoms = {mujoco.mj_id2name(g, mujoco.mjtObj.mjOBJ_GEOM, i) for i in range(g.ngeom) if g.geom_contype[i] & 1}
+    assert "trunk_base_ground_collision" in floor_geoms
+    assert {"left_foot_collision", "right_foot_collision"} <= floor_geoms
+    walk_floor = {mujoco.mj_id2name(w, mujoco.mjtObj.mjOBJ_GEOM, i) for i in range(w.ngeom) if w.geom_contype[i] & 1}
+    assert walk_floor == {"left_foot_collision", "right_foot_collision"}   # walking model unchanged

@@ -330,3 +330,107 @@ def make_jduck_standup_env_cfg(play: bool = False, rough: bool = False):   # noq
 if JDUCK_REPLAY_PROB > 0:
     JduckStandUpRlCfg.experiment_name += f"_replay{JDUCK_REPLAY_PROB:g}"
     JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name
+
+
+# ── Imitation of the demonstrated get-up (DeepMimic-style) ───────────────────
+# jsu8 (replay spawns alone) holds the already-standing replay states but does not carry a
+# mid-get-up state through: from a spawn partway up it sinks back. An episode spawned at
+# frame i of a replay is also paid for tracking frame i+t of the same replay (joint angles
+# and trunk height), until that replay ends. Other episodes get 0 from this term.
+# Recorded files carry L = frames per replay (20 ms each).
+JDUCK_IMIT_W = float(os.environ.get("JDUCK_IMIT_W", "0"))
+
+
+def _replay_index(env):
+    import torch
+
+    if not hasattr(env, "_jduck_replay_idx"):
+        env._jduck_replay_idx = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+    return env._jduck_replay_idx
+
+
+def spawn_from_replay_tracked(env, env_ids, prob: float, path: str):
+    import numpy as np
+    import torch
+
+    if env_ids is None or len(env_ids) == 0:
+        return
+    idx = _replay_index(env)
+    idx[env_ids.long()] = -1
+    key = (path, str(env.device))
+    if key not in _REPLAY_CACHE:
+        f = np.load(path)
+        _REPLAY_CACHE[key] = torch.tensor(f["s"], dtype=torch.float32, device=env.device)
+        _REPLAY_CACHE[key + ("L",)] = int(f["L"]) if "L" in f else 0
+    S, L = _REPLAY_CACHE[key], _REPLAY_CACHE[key + ("L",)]
+    sel = env_ids[torch.rand(len(env_ids), device=env.device) < prob]
+    if len(sel) == 0:
+        return
+    pick = torch.randint(0, S.shape[0], (len(sel),), device=env.device)
+    # reuse the plain spawn for the state write, with a fixed pick
+    gen = torch.Generator(device=env.device)
+    st_ids = sel
+    _spawn_with_pick(env, st_ids, S, pick)
+    idx[st_ids.long()] = pick
+    env._jduck_replay_L = L
+    env._jduck_replay_S = S
+
+
+def _spawn_with_pick(env, ids, S, pick):
+    import torch
+
+    nq = env.sim.data.qpos.shape[1]
+    st = S[pick]
+    qpos, qvel = st[:, :nq].clone(), st[:, nq:].clone()
+    yaw = (torch.rand(len(ids), device=env.device) * 2 - 1) * math.pi
+    c, s_ = torch.cos(yaw), torch.sin(yaw)
+    hw, hz = torch.cos(yaw / 2), torch.sin(yaw / 2)
+    w, qx, qy, qz = qpos[:, 3], qpos[:, 4], qpos[:, 5], qpos[:, 6]
+    qpos[:, 3:7] = torch.stack([hw * w - hz * qz, hw * qx - hz * qy, hw * qy + hz * qx, hw * qz + hz * w], 1)
+    for a in (0, 3):
+        vx, vy = qvel[:, a].clone(), qvel[:, a + 1].clone()
+        qvel[:, a], qvel[:, a + 1] = c * vx - s_ * vy, s_ * vx + c * vy
+    o = env.scene.env_origins[ids]
+    qpos[:, 0], qpos[:, 1], qpos[:, 2] = o[:, 0], o[:, 1], qpos[:, 2] + o[:, 2]
+    env.sim.data.qpos[ids.long()] = qpos
+    env.sim.data.qvel[ids.long()] = qvel
+
+
+def imitate_replay(env, joint_std: float = 0.3, z_std: float = 0.02):
+    import torch
+
+    idx = _replay_index(env)
+    out = torch.zeros(env.num_envs, device=env.device)
+    L = getattr(env, "_jduck_replay_L", 0)
+    if L <= 0:
+        return out
+    S = env._jduck_replay_S
+    t = env.episode_length_buf.long()
+    f = idx + t
+    ok = (idx >= 0) & (f // L == idx // L)            # still inside the same replay
+    if not ok.any():
+        return out
+    ref = S[f[ok]]
+    q = env.sim.data.qpos[ok]
+    z = q[:, 2] - env.scene.env_origins[ok, 2]
+    jerr = ((q[:, 7:] - ref[:, 7:S.shape[1] - env.sim.data.qvel.shape[1]]) ** 2).mean(-1)
+    out[ok] = torch.exp(-jerr / joint_std ** 2) * torch.exp(-((z - ref[:, 2]) ** 2) / z_std ** 2)
+    return out
+
+
+_make_replay = make_jduck_standup_env_cfg
+
+
+def make_jduck_standup_env_cfg(play: bool = False, rough: bool = False):   # noqa: F811
+    cfg = _make_replay(play=play, rough=rough)
+    if JDUCK_IMIT_W > 0 and JDUCK_REPLAY_PROB > 0:
+        from mjlab.managers import RewardTermCfg
+
+        cfg.events["spawn_from_replay"].func = spawn_from_replay_tracked
+        cfg.rewards["imitate_replay"] = RewardTermCfg(func=imitate_replay, weight=JDUCK_IMIT_W)
+    return cfg
+
+
+if JDUCK_IMIT_W > 0:
+    JduckStandUpRlCfg.experiment_name += f"_imit{JDUCK_IMIT_W:g}"
+    JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name

@@ -13,6 +13,8 @@ fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p' | tail -1)
 K=${fw%%,*}
 ksweep=$(python3 -c "k=float('$K'); print(f'{k*0.75:g},{k*1.25:g}')")
 [ "$fw" = orig ] && ksweep=""
+fr=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FRICTION=//p' | tail -1)
+frarg=""; [ -n "$fr" ] && frarg="--friction $fr"
 echo "== $name  $(date +%F_%T)  ${envs[*]}  iters=$iters seed=${SEED:-1}" > "$out"
 env -u PYTHONPATH "${envs[@]}" uv run --frozen train Mjlab-Velocity-Flat-JDuck --env.scene.num-envs 4096 \
     --agent.max_iterations "$iters" --agent.seed "${SEED:-1}" --agent.run-name "$name" \
@@ -42,5 +44,5 @@ onnx=jduck_$name.onnx
 scripts/jduck_export.sh "$d" "$last" "$onnx" 2>&1 | grep -E 'ONNX ok|训练环境|失败|键盘玩' >> "$out"
 JDUCK_EVAL_FW=$fw env -u PYTHONPATH uv run --frozen python scripts/jduck_eval.py "$onnx" 2>&1 \
     | grep -v -E 'Warp|mdp\]|Vel cmd' >> "$out"
-env -u PYTHONPATH uv run --frozen python ../../jduck_tools/hw_chain_eval.py "$onnx" --fw "$fw" --k-sweep "$ksweep" 2>&1 | grep -v -E 'Warp|mdp\]' >> "$out"
+env -u PYTHONPATH uv run --frozen python ../../jduck_tools/hw_chain_eval.py "$onnx" --fw "$fw" --k-sweep "$ksweep" $frarg 2>&1 | grep -v -E 'Warp|mdp\]' >> "$out"
 echo "== done $(date +%F_%T)" >> "$out"

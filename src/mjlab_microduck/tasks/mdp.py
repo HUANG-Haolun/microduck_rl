@@ -4497,8 +4497,12 @@ def set_random_crouch_state(
     joint_noise: float = 0.12,
     z_stand: float = 0.115,
     z_deep: float = 0.06,
+    anchor_by_name: dict | None = None,
 ):
     """Reset selected envs into a random mid-recovery crouch.
+
+    ``anchor_by_name`` (joint name → deep-crouch angle) defaults to microduck's
+    ``_CROUCH_ANCHOR_BY_NAME``; other robots pass their own (fold directions differ).
 
     Reverse curriculum for the recovery last mile (velstand run-5 lesson):
     prone-init episodes spend most of their fallen budget getting TO the deep
@@ -4520,7 +4524,7 @@ def set_random_crouch_state(
     # servo joints only (passive_* backlash hinges have ±1° ranges — noise
     # there would spawn them pinned outside their limits).
     joints = asset.data.default_joint_pos[env_ids].clone()
-    for name, anchor in _CROUCH_ANCHOR_BY_NAME.items():
+    for name, anchor in (anchor_by_name or _CROUCH_ANCHOR_BY_NAME).items():
         ids, _ = asset.find_joints(f"^{name}$")
         j = ids[0]
         joints[:, j] = joints[:, j] + lam * (anchor - joints[:, j])
@@ -4594,6 +4598,7 @@ def maybe_set_random_prone_orientation(
     so3_extra_z: float = 0.04,
     sit_prob: float = 0.0,
     sit_params: Optional[dict] = None,
+    crouch_params: Optional[dict] = None,
 ):
     """Reset event that overrides orientation to prone with probability `prone_prob`.
 
@@ -4673,7 +4678,7 @@ def maybe_set_random_prone_orientation(
                 randomize_servo_joints_uniform(env, jr, asset_cfg=asset_cfg, range_frac=joint_range_frac)
                 env.sim.data.qpos[jr, 2] += joint_random_extra_z
     if len(crouch_selected) > 0:
-        set_random_crouch_state(env, crouch_selected, asset_cfg=asset_cfg)
+        set_random_crouch_state(env, crouch_selected, asset_cfg=asset_cfg, **(crouch_params or {}))
     if len(sit_selected) > 0:
         set_random_ground_state(
             env, sit_selected, asset_cfg=asset_cfg,

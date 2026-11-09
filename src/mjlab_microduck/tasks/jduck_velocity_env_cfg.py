@@ -64,6 +64,11 @@ JDUCK_HEAD_CAPS = (1.10, 1.10, 0.60, 0.26)
 # settle test falls at −25 %, so this keeps training feasible while teaching
 # tolerance. Re-centre on the bench-measured value once identified.
 JDUCK_TORQUE_SCALE = (0.80, 1.15)
+# JDUCK_TORQUE_DR=<lo>,<hi> overrides it (the face-down/up get-up needs ≥ ~0.96 N·m:
+# ~/jduck_ops/getup_search.py finds none at 0.77). Adds `_tdr<lo>-<hi>` to the name.
+_tdr = os.environ.get("JDUCK_TORQUE_DR", "")
+if _tdr:
+    JDUCK_TORQUE_SCALE = tuple(float(x) for x in _tdr.split(","))
 # Gearbox friction spread (JDUCK_FRICTION_DR=<lo>,<hi> multiplier on JDUCK_FRICTION).
 # The inherited microduck friction DR only scales the BAM actuator → no-op on jduck.
 _fr = os.environ.get("JDUCK_FRICTION_DR", "")

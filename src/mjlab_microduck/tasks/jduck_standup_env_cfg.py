@@ -433,4 +433,6 @@ def make_jduck_standup_env_cfg(play: bool = False, rough: bool = False):   # noq
 
 if JDUCK_IMIT_W > 0:
     JduckStandUpRlCfg.experiment_name += f"_imit{JDUCK_IMIT_W:g}"
+if os.environ.get("JDUCK_TORQUE_DR"):
+    JduckStandUpRlCfg.experiment_name += f"_tdr{JDUCK_TORQUE_SCALE[0]:g}-{JDUCK_TORQUE_SCALE[1]:g}"
     JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name

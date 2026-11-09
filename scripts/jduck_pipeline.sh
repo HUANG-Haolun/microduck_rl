@@ -12,6 +12,7 @@ envs=(JDUCK_FW=16,0,0 JDUCK_NOLOAD=4.8 JDUCK_TORQUE=0.96 WANDB_MODE=offline "$@"
 fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p' | tail -1)
 K=${fw%%,*}
 ksweep=$(python3 -c "k=float('$K'); print(f'{k*0.75:g},{k*1.25:g}')")
+[ "$fw" = orig ] && ksweep=""
 echo "== $name  $(date +%F_%T)  ${envs[*]}  iters=$iters seed=${SEED:-1}" > "$out"
 env -u PYTHONPATH "${envs[@]}" uv run --frozen train Mjlab-Velocity-Flat-JDuck --env.scene.num-envs 4096 \
     --agent.max_iterations "$iters" --agent.seed "${SEED:-1}" --agent.run-name "$name" \

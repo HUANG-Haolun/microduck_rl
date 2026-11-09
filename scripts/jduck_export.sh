@@ -45,7 +45,9 @@ case "$exp" in
     *) echo "不认识的实验名：$exp（不是 jduck 训练？）" >&2; exit 1 ;;
 esac
 [[ "$exp" =~ _home(new|old) ]] && envs+=("JDUCK_HOME=${BASH_REMATCH[1]}")
-if [[ "$exp" =~ _k([0-9.]+)ff([0-9.]+)db([0-9.]+) ]]; then
+if [[ "$exp" =~ _k([0-9.]+)ff([0-9.]+)db([0-9.]+)fl([0-9.]+) ]]; then
+    envs+=("JDUCK_FW=${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]},${BASH_REMATCH[4]}")
+elif [[ "$exp" =~ _k([0-9.]+)ff([0-9.]+)db([0-9.]+) ]]; then
     envs+=("JDUCK_FW=${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]}")
 fi
 [[ "$exp" =~ _t([0-9.]+) ]] && envs+=("JDUCK_TORQUE=${BASH_REMATCH[1]}")
@@ -90,7 +92,7 @@ print(f"HOME       : {m.get('default_joint_pos')}")
 EOF
 
 if [[ "$exp" == jduck_velocity_ubt12hc* ]]; then
-    fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p'); fw=${fw:-1,0,2}
+    fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p'); fw=${fw:-orig}
     play="uv run --frozen scripts/infer_policy.py --robot jduck --walking $out --jduck-fw $fw"
     t=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_TORQUE=//p'); [ -n "$t" ] && play+=" --jduck-torque $t"
     w=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_NOLOAD=//p'); [ -n "$w" ] && play+=" --jduck-noload $w"

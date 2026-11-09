@@ -1356,8 +1356,9 @@ def main():
             # pwm = clamp(K|err|+FF, floor, 255), 0 in the deadband, on quantized ADC
             # counts, DC motor τ = τ_stall·(duty − ω/ω0). Applied as qfrc each step;
             # the XML position actuators are zeroed.
-            k, ff, db = (float(x) for x in args.jduck_fw.split(","))
-            jduck_fw = dict(K=k, FF=ff, DB=db, floor=0.0,
+            v = [float(x) for x in ("1,0,2,48" if args.jduck_fw == "orig" else args.jduck_fw).split(",")]
+            k, ff, db = v[:3]
+            jduck_fw = dict(K=k, FF=ff, DB=db, floor=v[3] if len(v) > 3 else 0.0,
                             stall=args.jduck_torque, w0=args.jduck_noload)
 
     if not args.walking and not args.standing and not args.sitstand:

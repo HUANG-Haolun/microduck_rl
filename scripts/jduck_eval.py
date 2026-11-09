@@ -26,7 +26,9 @@ import os
 FW = dict(K=16, FF=15, DB=1, floor=0.0, stall=0.96, w0=4.8)
 # JDUCK_EVAL_FW="K,FF,DB" overrides the law; JDUCK_EVAL_QUANT=0 → continuous error
 if os.environ.get("JDUCK_EVAL_FW"):
-    FW["K"], FW["FF"], FW["DB"] = (float(x) for x in os.environ["JDUCK_EVAL_FW"].split(","))
+    _v = [float(x) for x in ("1,0,2,48" if os.environ["JDUCK_EVAL_FW"] == "orig" else os.environ["JDUCK_EVAL_FW"]).split(",")]
+    FW["K"], FW["FF"], FW["DB"] = _v[:3]
+    FW["floor"] = _v[3] if len(_v) > 3 else 0.0
 QUANT = os.environ.get("JDUCK_EVAL_QUANT", "1") != "0"
 # `pd:` prefix on an ONNX path = evaluate with the v0 placeholder PD actuator
 # (kp=8, kd=0.2, 0.8 N·m) that jduck_walk_v0.onnx was trained with.

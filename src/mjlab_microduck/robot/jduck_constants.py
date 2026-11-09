@@ -105,11 +105,16 @@ JDUCK_ARMATURE = 0.005       # guess; to be identified
 
 # Firmware law: JDUCK_FW="K,FF,DB" → pwm = K*|err| + FF (floor 0), deadband DB.
 # Unset = the CURRENT firmware (pwm = clamp(|err|, 48, 255), deadband 2).
+# JDUCK_FW=orig = the stock firmware explicitly; "K,FF,DB,FLOOR" adds a pwm floor.
 _fw = os.environ.get("JDUCK_FW")
+if _fw == "orig":
+    _fw = "1,0,2,48"
 if _fw:
-    _k, _ff, _db = (float(x) for x in _fw.split(","))
-    JDUCK_FW_LAW = dict(pwm_per_count=_k, pwm_ff=_ff, pwm_min=0.0, deadband_counts=_db)
-    JDUCK_FW_TAG = f"k{_k:g}ff{_ff:g}db{_db:g}"
+    _v = [float(x) for x in _fw.split(",")]
+    _k, _ff, _db = _v[:3]
+    _floor = _v[3] if len(_v) > 3 else 0.0
+    JDUCK_FW_LAW = dict(pwm_per_count=_k, pwm_ff=_ff, pwm_min=_floor, deadband_counts=_db)
+    JDUCK_FW_TAG = f"k{_k:g}ff{_ff:g}db{_db:g}" + (f"fl{_floor:g}" if _floor else "")
 else:
     JDUCK_FW_LAW = dict(pwm_per_count=1.0, pwm_ff=0.0, pwm_min=48.0, deadband_counts=2.0)
     JDUCK_FW_TAG = "fwcur"

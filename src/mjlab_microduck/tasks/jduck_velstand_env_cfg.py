@@ -222,6 +222,9 @@ if _bc is not None:
     # JDUCK_VS_POSE_GATE=<rad>: frames with any leg joint (hip_roll/pitch, knee, ankle) more than
     # this far from HOME are taught by the stand-up expert even when the trunk is < 35° tilted.
     # jvs1–3 collapsed: the stand-up's deep crouch (tilt ~23°) fell to the walk anchor.
+    _bcw = float(os.environ.get("JDUCK_VS_BC_COEF", "0"))
+    if _bcw > 0:
+        _bc["coef"] = _bcw                 # fallen-frame BC weight toward the stand-up expert (default 1)
     _ms = float(os.environ.get("JDUCK_VS_MAX_STD", "0"))
     if _ms > 0:
         _bc["max_action_std"] = _ms
@@ -238,6 +241,8 @@ if JDUCK_KP_SCALE:
     JduckVelStandRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
 if os.environ.get("JDUCK_TORQUE_DR"):
     JduckVelStandRlCfg.experiment_name += f"_tdr{JDUCK_TORQUE_SCALE[0]:g}-{JDUCK_TORQUE_SCALE[1]:g}"
+if float(os.environ.get("JDUCK_VS_BC_COEF", "0")) > 0:
+    JduckVelStandRlCfg.experiment_name += f"_bc{float(os.environ['JDUCK_VS_BC_COEF']):g}"
 if float(os.environ.get("JDUCK_VS_MAX_STD", "0")) > 0:
     JduckVelStandRlCfg.experiment_name += f"_std{float(os.environ['JDUCK_VS_MAX_STD']):g}"
 if float(os.environ.get("JDUCK_VS_POSE_GATE", "0")) > 0:

@@ -167,6 +167,17 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
+from .jduck_standup_env_cfg import JduckStandUpRlCfg, make_jduck_standup_env_cfg
+
+# jduck stand-up (get up from lying / squatting) — the get-up teacher for jduck VelStand.
+register_mjlab_task(
+    task_id="Mjlab-StandUp-Flat-JDuck",
+    env_cfg=make_jduck_standup_env_cfg(),
+    play_env_cfg=make_jduck_standup_env_cfg(play=True),
+    rl_cfg=JduckStandUpRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
 # Ground-pick task — crouch, touch the ground with the mouth tip, return to stand
 register_mjlab_task(
     task_id="Mjlab-GroundPick-Flat-MicroDuck",

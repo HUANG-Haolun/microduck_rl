@@ -43,6 +43,7 @@ case "$exp" in
     jduck_velocity_pd_*)     envs=(JDUCK_ACTUATOR=pd) ;;
     jduck_velocity_ubt12hc*) envs=(JDUCK_ACTUATOR=ubt12hc) ;;
     jduck_sitstand_ubt12hc*) envs=(JDUCK_ACTUATOR=ubt12hc) ;;
+    jduck_standup_ubt12hc*)  envs=(JDUCK_ACTUATOR=ubt12hc) ;;
     *) echo "不认识的实验名：$exp（不是 jduck 训练？）" >&2; exit 1 ;;
 esac
 [[ "$exp" =~ _home(new|old) ]] && envs+=("JDUCK_HOME=${BASH_REMATCH[1]}")
@@ -87,6 +88,7 @@ echo "训练环境   : ${envs[*]}"
 echo "输出       : $out"
 task=Mjlab-Velocity-Flat-JDuck
 [[ "$exp" == jduck_sitstand_* ]] && task=Mjlab-SitStand-Flat-JDuck
+[[ "$exp" == jduck_standup_* ]] && task=Mjlab-StandUp-Flat-JDuck
 env "${envs[@]}" WANDB_MODE=offline uv run --frozen scripts/export.py $task \
     --checkpoint-file "$ckpt" --onnx-file "$out" > /tmp/jduck_export.log 2>&1 \
     || { echo "导出失败，日志：/tmp/jduck_export.log" >&2; tail -20 /tmp/jduck_export.log >&2; exit 1; }
@@ -98,7 +100,11 @@ print(f"ONNX ok    : obs {s.get_inputs()[0].shape} -> actions {s.get_outputs()[0
 print(f"HOME       : {m.get('default_joint_pos')}")
 EOF
 
-if [[ "$exp" == jduck_sitstand_* ]]; then
+if [[ "$exp" == jduck_standup_* ]]; then
+    fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p')
+    play="uv run --frozen scripts/infer_policy.py --robot jduck --standing $out --jduck-fw $fw"
+    evalarg=""
+elif [[ "$exp" == jduck_sitstand_* ]]; then
     fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p')
     play="uv run --frozen scripts/infer_policy.py --robot jduck --sitstand $out --jduck-fw $fw   # Y = 坐下 / 站起"
     evalarg=""

@@ -42,6 +42,7 @@ case "$exp" in
     jduck_velocity)          envs=(JDUCK_ACTUATOR=pd JDUCK_HOME=old) ;;
     jduck_velocity_pd_*)     envs=(JDUCK_ACTUATOR=pd) ;;
     jduck_velocity_ubt12hc*) envs=(JDUCK_ACTUATOR=ubt12hc) ;;
+    jduck_sitstand_ubt12hc*) envs=(JDUCK_ACTUATOR=ubt12hc) ;;
     *) echo "不认识的实验名：$exp（不是 jduck 训练？）" >&2; exit 1 ;;
 esac
 [[ "$exp" =~ _home(new|old) ]] && envs+=("JDUCK_HOME=${BASH_REMATCH[1]}")
@@ -84,7 +85,9 @@ out="${out//__/_}"
 echo "checkpoint : $ckpt"
 echo "训练环境   : ${envs[*]}"
 echo "输出       : $out"
-env "${envs[@]}" WANDB_MODE=offline uv run --frozen scripts/export.py Mjlab-Velocity-Flat-JDuck \
+task=Mjlab-Velocity-Flat-JDuck
+[[ "$exp" == jduck_sitstand_* ]] && task=Mjlab-SitStand-Flat-JDuck
+env "${envs[@]}" WANDB_MODE=offline uv run --frozen scripts/export.py $task \
     --checkpoint-file "$ckpt" --onnx-file "$out" > /tmp/jduck_export.log 2>&1 \
     || { echo "导出失败，日志：/tmp/jduck_export.log" >&2; tail -20 /tmp/jduck_export.log >&2; exit 1; }
 
@@ -95,7 +98,11 @@ print(f"ONNX ok    : obs {s.get_inputs()[0].shape} -> actions {s.get_outputs()[0
 print(f"HOME       : {m.get('default_joint_pos')}")
 EOF
 
-if [[ "$exp" == jduck_velocity_ubt12hc* ]]; then
+if [[ "$exp" == jduck_sitstand_* ]]; then
+    fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p')
+    play="uv run --frozen scripts/infer_policy.py --robot jduck --sitstand $out --jduck-fw $fw   # Y = 坐下 / 站起"
+    evalarg=""
+elif [[ "$exp" == jduck_velocity_ubt12hc* ]]; then
     fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p'); fw=${fw:-orig}
     play="uv run --frozen scripts/infer_policy.py --robot jduck --walking $out --jduck-fw $fw"
     t=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_TORQUE=//p'); [ -n "$t" ] && play+=" --jduck-torque $t"
@@ -108,7 +115,7 @@ fi
 echo
 echo "键盘玩     : $play"
 
-if [ "${EVAL:-0}" = 1 ]; then
+if [ "${EVAL:-0}" = 1 ] && [ -n "$evalarg" ]; then
     echo; echo "== 测评 =="
     uv run --frozen python scripts/jduck_eval.py "$evalarg" 2>&1 | grep -v -E 'Warp|mdp\]|Vel cmd'
 fi

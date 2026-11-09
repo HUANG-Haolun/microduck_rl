@@ -144,6 +144,10 @@ DEFAULT_POSE = np.array([
 # Also stored in the exported ONNX metadata as default_joint_pos.
 JDUCK_XML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..",
                          "jduck_mjcf", "scene_view.xml")
+# For jduck sit/stand: the same robot with floor-colliding body meshes, plus viewer actuators
+# zeroed below like JDUCK_XML's (the firmware law drives the joints).
+JDUCK_GC_XML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..",
+                            "jduck_mjcf", "scene_groundcontact_view.xml")
 JDUCK_DEFAULT_POSE = np.array([
     0.0, 0.0, 0.25, -0.30, 0.05,     # left leg
     0.0, 0.0, 0.0, 0.0,              # neck / head
@@ -1350,7 +1354,8 @@ def main():
         if args.delay is None:
             args.delay = [0]
         if args.scene is None:
-            args.scene = JDUCK_XML
+            # sit/stand needs the body to collide with the floor (robot_groundcontact.xml)
+            args.scene = JDUCK_GC_XML if (args.sitstand and not args.walking) else JDUCK_XML
         if args.jduck_fw:
             # Servo-firmware actuator, same as training (actuator/ubt12hc.py):
             # pwm = clamp(K|err|+FF, floor, 255), 0 in the deadband, on quantized ADC
@@ -1542,7 +1547,7 @@ def main():
         print("jduck actuator delay: 1–3 physics steps (5–15 ms), resampled every step (same as training)")
         if not args.true_obs:
             try:
-                meta = ort.InferenceSession(args.walking).get_modelmeta().custom_metadata_map
+                meta = ort.InferenceSession(args.walking or args.sitstand).get_modelmeta().custom_metadata_map
                 qd_ema = float(meta.get("jduck_qd_ema", "1"))
             except Exception:
                 qd_ema = 1.0

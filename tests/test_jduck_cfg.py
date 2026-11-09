@@ -124,3 +124,28 @@ def test_groundcontact_model_matches_walk_model():
     assert {"left_foot_collision", "right_foot_collision"} <= floor_geoms
     walk_floor = {mujoco.mj_id2name(w, mujoco.mjtObj.mjOBJ_GEOM, i) for i in range(w.ngeom) if w.geom_contype[i] & 1}
     assert walk_floor == {"left_foot_collision", "right_foot_collision"}   # walking model unchanged
+
+
+def test_jduck_sitstand_cfg():
+    """jduck sitstand: groundcontact robot, jduck sit pose/heights, no BAM-only events."""
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import mjlab_microduck.tasks\n"
+        "from mjlab.tasks.registry import load_env_cfg\n"
+        "c = load_env_cfg('Mjlab-SitStand-Flat-JDuck')\n"
+        "print(c.scene.entities['robot'].spec_fn.__name__)\n"
+        "print(c.commands['twist'].sit_z, c.commands['twist'].stand_z)\n"
+        "print(c.rewards['posture_pose_legs'].params['sit_overrides'][3])\n"
+        "print('randomize_joint_friction' in c.events, 'randomize_ubt12hc' in c.events)\n"
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith("JDUCK_")}
+    env.update(JDUCK_FW="8,0,0", JDUCK_HOME="old")
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    spec, heights, knee, events = out.stdout.strip().splitlines()[-4:]
+    assert spec == "get_jduck_groundcontact_spec"
+    assert heights == "0.108 0.133"
+    assert float(knee) == -1.2
+    assert events == "False True"

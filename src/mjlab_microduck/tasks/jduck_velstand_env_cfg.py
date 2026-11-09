@@ -227,5 +227,7 @@ if JDUCK_OBS_ADC:
     JduckVelStandRlCfg.experiment_name += "_adcobs" + (f"_lag{JDUCK_OBS_LAG}" if JDUCK_OBS_LAG else "")
 if JDUCK_KP_SCALE:
     JduckVelStandRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
+if os.environ.get("JDUCK_TORQUE_DR"):
+    JduckVelStandRlCfg.experiment_name += f"_tdr{JDUCK_TORQUE_SCALE[0]:g}-{JDUCK_TORQUE_SCALE[1]:g}"
 JduckVelStandRlCfg.run_name = JduckVelStandRlCfg.experiment_name
 JduckVelStandRlCfg.max_iterations = 3000

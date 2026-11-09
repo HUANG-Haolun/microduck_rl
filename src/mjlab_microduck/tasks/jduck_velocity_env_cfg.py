@@ -64,6 +64,10 @@ JDUCK_HEAD_CAPS = (1.10, 1.10, 0.60, 0.26)
 # settle test falls at −25 %, so this keeps training feasible while teaching
 # tolerance. Re-centre on the bench-measured value once identified.
 JDUCK_TORQUE_SCALE = (0.80, 1.15)
+# Gearbox friction spread (JDUCK_FRICTION_DR=<lo>,<hi> multiplier on JDUCK_FRICTION).
+# The inherited microduck friction DR only scales the BAM actuator → no-op on jduck.
+_fr = os.environ.get("JDUCK_FRICTION_DR", "")
+JDUCK_FRICTION_SCALE = tuple(float(x) for x in _fr.split(",")) if _fr else None
 JDUCK_SPEED_SCALE = (0.85, 1.15)
 # Firmware KP spread (JDUCK_KP_DR=<lo>,<hi> as a multiplier on K, default off).
 # e.g. 0.75,1.25 → K=16 trains on K∈[12, 20]. Adds `_kpdr<lo>-<hi>` to the name.
@@ -448,6 +452,17 @@ def make_jduck_velocity_env_cfg(
                     "kp_range": JDUCK_KP_SCALE},
         )
 
+    if JDUCK_FRICTION_SCALE:
+        cfg.events["randomize_jduck_friction"] = EventTermCfg(
+            func=microduck_mdp.randomize_dof_field_scaled,   # field expanded per env by expand_bam_friction_fields
+            mode="reset",
+            params={
+                "asset_cfg": SceneEntityCfg("robot", joint_names=(r"^(?!passive_).*",)),
+                "field": "dof_frictionloss",
+                "scale_range": JDUCK_FRICTION_SCALE,
+            },
+        )
+
     twist = deepcopy(cfg.commands["twist"])
     twist.ranges.lin_vel_x = JDUCK_LIN_VEL_X
     twist.ranges.lin_vel_y = JDUCK_LIN_VEL_Y
@@ -576,6 +591,10 @@ if JDUCK_OBS_ADC:
         JduckRlCfg.experiment_name += f"_qdema{JDUCK_QD_EMA:g}"
     if JDUCK_OBS_LAG:
         JduckRlCfg.experiment_name += f"_lag{JDUCK_OBS_LAG}"
+if os.environ.get("JDUCK_FRICTION"):
+    JduckRlCfg.experiment_name += f"_fr{float(os.environ['JDUCK_FRICTION']):g}"
+if JDUCK_FRICTION_SCALE:
+    JduckRlCfg.experiment_name += f"_frdr{JDUCK_FRICTION_SCALE[0]:g}-{JDUCK_FRICTION_SCALE[1]:g}"
 if JDUCK_KP_SCALE:
     JduckRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:

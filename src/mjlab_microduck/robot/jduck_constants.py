@@ -139,7 +139,11 @@ if JDUCK_ACTUATOR == "ubt12hc":
         stall_torque=JDUCK_EFFORT_LIMIT,
         no_load_speed=JDUCK_NO_LOAD_SPEED,
         armature=JDUCK_ARMATURE,
-        frictionloss=0.01,
+        # JDUCK_FRICTION=<N·m>: gearbox Coulomb friction. 0.01 was a guess and made
+        # the stock firmware impossible to hold still with (no policy, old HOME: falls),
+        # while 0.05 already lets it sit quiet (leg |qd| 0.0015). Real geared hobby
+        # servos are usually ≥0.05 N·m; measure it on the bench (calibrate.py).
+        frictionloss=float(os.environ.get("JDUCK_FRICTION", "0.01")),
         delay_min_lag=1,
         delay_max_lag=3,
         **JDUCK_FW_LAW,

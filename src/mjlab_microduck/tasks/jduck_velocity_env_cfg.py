@@ -184,6 +184,15 @@ JDUCK_CAPS_WALK = float(os.environ.get("JDUCK_CAPS_WALK", "1"))
 # rad/s; 0 = always). Standing-only CAPS still fell 3× more than no CAPS (L1 0.78, L2
 # 0.64 vs p8 0.13): a pushed robot at zero command needs fast corrections. Adds `c<val>`.
 JDUCK_CAPS_CALM = float(os.environ.get("JDUCK_CAPS_CALM", "0"))
+# CAPS off until iteration JDUCK_CAPS_START (default 0 = from the start). Smoothing a
+# policy that cannot walk yet may be why CAPS runs fall more. Adds `s<it>` to the name.
+JDUCK_CAPS_START = int(os.environ.get("JDUCK_CAPS_START", "0"))
+
+# Shift every iteration-staged curriculum (action-rate weight, standing-env share,
+# head/COM ranges, head-pose weight) later by JDUCK_CURR_DELAY iterations. The stock
+# firmware only starts stepping around iteration 800 (O1), but the action-rate penalty
+# and the standing share start ramping at 500. Adds `_cd<it>` to the name.
+JDUCK_CURR_DELAY = int(os.environ.get("JDUCK_CURR_DELAY", "0"))
 
 # Yaw-rate tracking on a moving average (JDUCK_ANG_EMA=<tau s>, default 0 = the
 # stock instantaneous term). Measured on ff0db0_homeold walking at 0.2 m/s: mean
@@ -553,6 +562,14 @@ def make_jduck_velocity_env_cfg(
         a["joint_pos"].delay_min_lag = JDUCK_OBS_LAG
         a["joint_pos"].delay_max_lag = JDUCK_OBS_LAG
 
+    if JDUCK_CURR_DELAY > 0:
+        d = JDUCK_CURR_DELAY * 24     # env steps per iteration
+        for name, term in cfg.curriculum.items():
+            for key in ("weight_stages", "standing_stages", "range_stages", "stages"):
+                st = term.params.get(key)
+                if st:
+                    term.params[key] = [{**s, "step": (s["step"] + d) if s["step"] > 0 else 0} for s in st]
+
     head = deepcopy(cfg.commands["head_pose"])
     head.ranges = _clip_ranges(head.ranges, JDUCK_HEAD_CAPS)
     cfg.commands["head_pose"] = head
@@ -608,12 +625,13 @@ if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
         caps_stand_boost: float = 4.0
         caps_walk_weight: float = 1.0
         caps_calm: float = 0.0
+        caps_start_iter: int = 0
 
     _a = JduckRlCfg.algorithm
     JduckRlCfg.algorithm = _PpoCapsCfg(**{**vars(_a), "class_name": "mjlab_microduck.tasks.ppo_caps:PPOCaps",
                                          "caps_spatial": JDUCK_CAPS_S, "caps_temporal": JDUCK_CAPS_T,
                                          "caps_stand_boost": JDUCK_CAPS_STAND, "caps_walk_weight": JDUCK_CAPS_WALK,
-                                         "caps_calm": JDUCK_CAPS_CALM})
+                                         "caps_calm": JDUCK_CAPS_CALM, "caps_start_iter": JDUCK_CAPS_START})
     JduckRlCfg.experiment_name += f"_capsS{JDUCK_CAPS_S:g}T{JDUCK_CAPS_T:g}"
     if JDUCK_CAPS_STAND != 4:
         JduckRlCfg.experiment_name += f"b{JDUCK_CAPS_STAND:g}"
@@ -621,4 +639,8 @@ if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
         JduckRlCfg.experiment_name += f"w{JDUCK_CAPS_WALK:g}"
     if JDUCK_CAPS_CALM > 0:
         JduckRlCfg.experiment_name += f"c{JDUCK_CAPS_CALM:g}"
+    if JDUCK_CAPS_START > 0:
+        JduckRlCfg.experiment_name += f"s{JDUCK_CAPS_START}"
+if JDUCK_CURR_DELAY > 0:
+    JduckRlCfg.experiment_name += f"_cd{JDUCK_CURR_DELAY}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

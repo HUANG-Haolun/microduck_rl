@@ -71,6 +71,8 @@ if [[ "$exp" =~ _capsS([0-9.]+)T([0-9.]+) ]]; then envs+=("JDUCK_CAPS_S=${BASH_R
 [[ "$exp" =~ _capsS[0-9.]+T[0-9.]+(b[0-9.]+)?w([0-9.]+) ]] && envs+=("JDUCK_CAPS_WALK=${BASH_REMATCH[2]}")
 [[ "$exp" =~ _capsS[0-9.]+T[0-9.]+b([0-9.]+) ]] && envs+=("JDUCK_CAPS_STAND=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _capsS[0-9.]+T[0-9.]+[bw0-9.]*c([0-9.]+) ]] && envs+=("JDUCK_CAPS_CALM=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _capsS[0-9.]+T[0-9.]+[bwc0-9.]*s([0-9]+) ]] && envs+=("JDUCK_CAPS_START=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _cd([0-9]+) ]] && envs+=("JDUCK_CURR_DELAY=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _fr([0-9.]+)(_|$) ]] && envs+=("JDUCK_FRICTION=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _frdr([0-9.]+)-([0-9.]+) ]] && envs+=("JDUCK_FRICTION_DR=${BASH_REMATCH[1]},${BASH_REMATCH[2]}")
 [[ "$exp" =~ _kpdr([0-9.]+)-([0-9.]+) ]] && envs+=("JDUCK_KP_DR=${BASH_REMATCH[1]},${BASH_REMATCH[2]}")

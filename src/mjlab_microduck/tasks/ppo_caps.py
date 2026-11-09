@@ -38,7 +38,7 @@ _SIGMA = (
 class PPOCaps(PPO):
     def __init__(self, *args, caps_spatial: float = 0.0, caps_temporal: float = 0.0,
                  caps_stand_boost: float = 4.0, caps_walk_weight: float = 1.0, caps_calm: float = 0.0,
-                 caps_steps: int = 4, caps_batch: int = 16384,
+                 caps_start_iter: int = 0, caps_steps: int = 4, caps_batch: int = 16384,
                  caps_sigma_scale: float = 1.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.caps_spatial = caps_spatial
@@ -46,12 +46,15 @@ class PPOCaps(PPO):
         self.caps_stand_boost = caps_stand_boost
         self.caps_walk_weight = caps_walk_weight
         self.caps_calm = caps_calm
+        self.caps_start_iter = caps_start_iter
+        self._caps_updates = 0
         self.caps_steps = caps_steps
         self.caps_batch = caps_batch
         self.caps_sigma = torch.tensor(_SIGMA, device=self.device) * caps_sigma_scale
 
     def update(self) -> dict[str, float]:
-        use = self.caps_spatial > 0 or self.caps_temporal > 0
+        self._caps_updates += 1      # one PPO update per training iteration
+        use = (self.caps_spatial > 0 or self.caps_temporal > 0) and self._caps_updates > self.caps_start_iter
         if use:
             obs = self.storage.observations["actor"].clone()          # (T, N, 61)
             dones = self.storage.dones.clone().squeeze(-1).bool()       # (T, N)

@@ -706,12 +706,40 @@ class PolicyInference:
 
     def get_joint_pos_relative(self):
         """Get joint positions relative to default pose."""
+        if getattr(self, "hw_obs", False):
+            return self.hw_q - self.default_pose
         current_pos = self.data.qpos[self.joint_qpos_indices].copy().astype(np.float32)
         return current_pos - self.default_pose
 
     def get_joint_vel(self):
         """Get joint velocities."""
+        if getattr(self, "hw_obs", False):
+            return self.hw_qd.copy()
         return self.data.qvel[self.joint_qvel_indices].copy().astype(np.float32)
+
+    def enable_hw_obs(self, phase, qd_ema=1.0):
+        """Joint obs the way jduck_run.py gets them on the robot: q = the ADC reading
+        (2π/1024 quantization) sent back with LAST tick's command, qd = Δq / 20 ms of
+        those readings (optionally EMA-filtered like training, from ONNX metadata)."""
+        self.hw_obs = True
+        self.hw_phase = phase
+        self.hw_qd_ema = qd_ema
+        q = self._adc_q()
+        self.hw_q, self.hw_q_prev = q, q.copy()
+        self.hw_qd = np.zeros_like(q)
+
+    def _adc_q(self):
+        k = JDUCK_RAD_PER_COUNT
+        raw = self.data.qpos[self.joint_qpos_indices]
+        return ((np.floor(raw / k + self.hw_phase) - self.hw_phase + 0.5) * k).astype(np.float32)
+
+    def hw_obs_tick(self):
+        """Call once per control tick, after the policy acted: the servo replies to this
+        tick's command carry the position read just now; the next obs uses it."""
+        q = self._adc_q()
+        raw = (q - self.hw_q) / 0.02
+        self.hw_qd = (self.hw_qd + self.hw_qd_ema * (raw - self.hw_qd)).astype(np.float32)
+        self.hw_q_prev, self.hw_q = self.hw_q, q
 
     def get_observations(self):
         """Collect observations matching policy input.
@@ -1295,9 +1323,11 @@ def main():
                              "kp=8 kd=0.2 0.8 Nm, same as training), use jduck's HOME pose and "
                              "trunk height, and its training velocity ranges. Implies --no-bam "
                              "--new-cmd-obs --delay 1 3.")
-    parser.add_argument("--jduck-fw", default="16,15,1", metavar="K,FF,DB",
+    parser.add_argument("--true-obs", action="store_true",
+                        help="(jduck) feed true joint pos/vel instead of the robot-style ADC obs")
+    parser.add_argument("--jduck-fw", default="16,0,0", metavar="K,FF,DB",
                         help="(jduck) UBT-12HC firmware law the policy was trained with "
-                             "(JDUCK_FW). Default 16,15,1 = firmware/ubt12hc_pd. "
+                             "(JDUCK_FW). Default 16,0,0 = firmware/ubt12hc_pd defaults. "
                              "'' = use the XML PD actuators (for the v0 PD policy).")
     parser.add_argument("--jduck-torque", type=float, default=0.96, help="(jduck) stall torque N·m (JDUCK_TORQUE)")
     parser.add_argument("--jduck-noload", type=float, default=4.8, help="(jduck) no-load speed rad/s (JDUCK_NOLOAD)")
@@ -1509,6 +1539,15 @@ def main():
         jduck_delay = SubstepDelay(1, 3)
         jduck_target = data.ctrl[:len(policy.joint_qvel_indices)].copy()
         print("jduck actuator delay: 1–3 physics steps (5–15 ms), resampled every step (same as training)")
+        if not args.true_obs:
+            try:
+                meta = ort.InferenceSession(args.walking).get_modelmeta().custom_metadata_map
+                qd_ema = float(meta.get("jduck_qd_ema", "1"))
+            except Exception:
+                qd_ema = 1.0
+            policy.enable_hw_obs(np.random.default_rng(1).random(len(policy.joint_qvel_indices)), qd_ema)
+            print(f"jduck joint obs: robot-style (ADC-quantized q from last tick, qd = Δq/20 ms, EMA {qd_ema:g}); "
+                  f"--true-obs for the old ideal obs")
 
     # Verify observation size
     test_obs = policy.get_observations()
@@ -1808,6 +1847,8 @@ def main():
                     policy.apply_action(action)
                     if jduck_delay is not None:
                         jduck_target = data.ctrl[:len(jduck_target)].copy()
+                    if getattr(policy, "hw_obs", False):
+                        policy.hw_obs_tick()
                 else:
                     # Paused: keep last ctrl, don't query the policy. Motors
                     # hold position. Use a zero action just so downstream

@@ -263,3 +263,70 @@ def make_jduck_standup_env_cfg(play: bool = False, rough: bool = False):   # noq
 if JDUCK_HEAD_COST > 0:
     JduckStandUpRlCfg.experiment_name += f"_head{JDUCK_HEAD_COST:g}"
     JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name
+
+
+# ── Reverse-curriculum spawns from a demonstrated get-up ─────────────────────
+# jsu1–jsu6 never discovered a get-up from face down, yet one exists under the servo law:
+# ~/jduck_ops/getup_search.py (CEM over 3 symmetric keyframes, firmware K=8, 0.96 N·m) finds
+# one, and replays survive K 8–10 / τ 0.96–1.05 / any yaw (getup_record.py). Those replays
+# are saved as full (qpos, qvel) every 20 ms. With probability JDUCK_REPLAY_PROB a reset
+# overwrites the spawn with a random state along that path (random yaw, env origin), so the
+# frontier of the get-up gets on-policy data (AGENTS.md: reverse-curriculum spawns).
+JDUCK_REPLAY_PROB = float(os.environ.get("JDUCK_REPLAY_PROB", "0"))
+JDUCK_REPLAY_FILE = os.environ.get("JDUCK_REPLAY_FILE",
+                                   os.path.expanduser("~/jduck_ops/getup_states_down.npz"))
+_REPLAY_CACHE = {}
+
+
+def spawn_from_replay(env, env_ids, prob: float, path: str):
+    import numpy as np
+    import torch
+
+    if env_ids is None or len(env_ids) == 0 or prob <= 0:
+        return
+    key = (path, str(env.device))
+    if key not in _REPLAY_CACHE:
+        s = np.load(path)["s"]
+        _REPLAY_CACHE[key] = torch.tensor(s, dtype=torch.float32, device=env.device)
+    S = _REPLAY_CACHE[key]
+    nq = env.sim.data.qpos.shape[1]
+    assert S.shape[1] == nq + env.sim.data.qvel.shape[1], "replay states do not match this model"
+    ids = env_ids[torch.rand(len(env_ids), device=env.device) < prob]
+    if len(ids) == 0:
+        return
+    st = S[torch.randint(0, S.shape[0], (len(ids),), device=env.device)]
+    qpos, qvel = st[:, :nq].clone(), st[:, nq:].clone()
+    yaw = (torch.rand(len(ids), device=env.device) * 2 - 1) * math.pi
+    c, s_ = torch.cos(yaw), torch.sin(yaw)
+    # rotate root position/orientation/linear+angular velocity about world z
+    x, y = qpos[:, 0], qpos[:, 1]
+    qpos[:, 0], qpos[:, 1] = c * x - s_ * y, s_ * x + c * y
+    hw, hz = torch.cos(yaw / 2), torch.sin(yaw / 2)
+    w, qx, qy, qz = qpos[:, 3], qpos[:, 4], qpos[:, 5], qpos[:, 6]
+    qpos[:, 3:7] = torch.stack([hw * w - hz * qz, hw * qx - hz * qy, hw * qy + hz * qx, hw * qz + hz * w], 1)
+    for a in (0, 3):
+        vx, vy = qvel[:, a], qvel[:, a + 1]
+        qvel[:, a], qvel[:, a + 1] = c * vx - s_ * vy, s_ * vx + c * vy
+    origins = env.scene.env_origins[ids]
+    qpos[:, 0] = qpos[:, 0] - qpos[:, 0] + origins[:, 0]     # recorded x/y drift dropped
+    qpos[:, 1] = origins[:, 1]
+    qpos[:, 2] = qpos[:, 2] + origins[:, 2]
+    env.sim.data.qpos[ids.long()] = qpos
+    env.sim.data.qvel[ids.long()] = qvel
+
+
+_make_head = make_jduck_standup_env_cfg
+
+
+def make_jduck_standup_env_cfg(play: bool = False, rough: bool = False):   # noqa: F811
+    cfg = _make_head(play=play, rough=rough)
+    if JDUCK_REPLAY_PROB > 0:
+        cfg.events["spawn_from_replay"] = EventTermCfg(
+            func=spawn_from_replay, mode="reset",
+            params={"prob": JDUCK_REPLAY_PROB, "path": JDUCK_REPLAY_FILE})
+    return cfg
+
+
+if JDUCK_REPLAY_PROB > 0:
+    JduckStandUpRlCfg.experiment_name += f"_replay{JDUCK_REPLAY_PROB:g}"
+    JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name

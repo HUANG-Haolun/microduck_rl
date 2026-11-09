@@ -217,3 +217,49 @@ def make_jduck_standup_env_cfg(play: bool = False, rough: bool = False):   # noq
 if JDUCK_GATE_HEIGHT:
     JduckStandUpRlCfg.experiment_name += "_hgate"
     JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name
+
+
+# ── Head-support cost ────────────────────────────────────────────────────────
+# jsu3 (height rewards gated on upright) stopped parking at standing height on its head, but
+# from face down it still settles head-on-floor in a crouch (trunk 0.087 m, tilt 25°): the
+# head is its third leg. Charge head–floor contact force while the robot should be getting
+# up (always, in this task: every episode's goal is standing). Free below 3 N so a brief
+# touch while rolling is cheap; ~0.1 per N above that (head+neck weigh ~4.8 N, so leaning
+# its full weight on the head costs ~0.2/step ≈ the upright terms it would gain).
+from mjlab.sensor import ContactMatch, ContactSensorCfg  # noqa: E402
+
+
+def head_floor_force(env, sensor_name: str = "head_ground_contact", threshold: float = 3.0):
+    import torch
+
+    f = env.scene.sensors[sensor_name].data.force
+    f = torch.nan_to_num(f.norm(dim=-1), nan=0.0)
+    if f.dim() > 1:
+        f = f.sum(dim=-1)
+    return torch.clamp(f - threshold, min=0.0)
+
+
+JDUCK_HEAD_COST = float(os.environ.get("JDUCK_HEAD_COST", "0"))
+_make_gated = make_jduck_standup_env_cfg
+
+
+def make_jduck_standup_env_cfg(play: bool = False, rough: bool = False):   # noqa: F811
+    cfg = _make_gated(play=play, rough=rough)
+    if JDUCK_HEAD_COST > 0:
+        from mjlab.managers import RewardTermCfg
+
+        head = ContactSensorCfg(
+            name="head_ground_contact",
+            primary=ContactMatch(mode="body", pattern=rf"^({'|'.join(JDUCK_HEAD_BODY_NAMES)})$", entity="robot"),
+            secondary=ContactMatch(mode="body", pattern="terrain"),
+            fields=("force",), reduce="netforce", num_slots=1,
+        )
+        cfg.scene.sensors = tuple(cfg.scene.sensors) + (head,)
+        cfg.rewards["head_support"] = RewardTermCfg(func=head_floor_force, weight=-JDUCK_HEAD_COST,
+                                                    params={"threshold": 3.0})
+    return cfg
+
+
+if JDUCK_HEAD_COST > 0:
+    JduckStandUpRlCfg.experiment_name += f"_head{JDUCK_HEAD_COST:g}"
+    JduckStandUpRlCfg.run_name = JduckStandUpRlCfg.experiment_name

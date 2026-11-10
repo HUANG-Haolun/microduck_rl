@@ -148,6 +148,11 @@ JDUCK_XML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
 # zeroed below like JDUCK_XML's (the firmware law drives the joints).
 JDUCK_GC_XML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..",
                             "jduck_mjcf", "scene_groundcontact_view.xml")
+# jduck kick: groundcontact view + the kick ball (jduck_mjcf/build_mjcf.py)
+JDUCK_BALL_XML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..",
+                              "jduck_mjcf", "scene_ball_view.xml")
+# jduck's feet sit at y = ±0.064 at HOME (Mjlab-BallKick-Flat-JDuck places the ball there)
+JDUCK_BALL_OFFSET_ABS_Y = 0.064
 JDUCK_DEFAULT_POSE = np.array([
     0.0, 0.0, 0.25, -0.30, 0.05,     # left leg
     0.0, 0.0, 0.0, 0.0,              # neck / head
@@ -1355,7 +1360,13 @@ def main():
             args.delay = [0]
         if args.scene is None:
             # sit/stand needs the body to collide with the floor (robot_groundcontact.xml)
-            args.scene = JDUCK_GC_XML if (args.sitstand and not args.walking) else JDUCK_XML
+            if args.kick_left or args.kick_right:
+                args.scene = JDUCK_BALL_XML
+            else:
+                args.scene = JDUCK_GC_XML if (args.sitstand and not args.walking) else JDUCK_XML
+        if args.kick_left or args.kick_right:
+            global BALL_OFFSET_ABS_Y
+            BALL_OFFSET_ABS_Y = JDUCK_BALL_OFFSET_ABS_Y
         if args.jduck_fw:
             # Servo-firmware actuator, same as training (actuator/ubt12hc.py):
             # pwm = clamp(K|err|+FF, floor, 255), 0 in the deadband, on quantized ADC

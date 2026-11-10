@@ -53,6 +53,22 @@ JDUCK_ANG_VEL_Z = (-0.8, 0.8)
 # ±0.4 m/s → sqrt(0.1)·0.25/0.4, and sqrt(0.5) at ±1.0 rad/s → sqrt(0.5)·0.8.
 JDUCK_LIN_STD = 0.198
 JDUCK_ANG_STD = 0.566
+# JDUCK_CMD=<vx>,<vy>,<wz>: symmetric command ranges (default 0.25,0.15,0.8). The robot runner's key
+# limits are 0.08 / 0.05 / 0.25 (jduck_run.py --max-vx/--max-vy/--max-wz): at 0.08 m/s with std 0.198
+# standing still still earns exp(-0.08²/0.198²) = 85 % of track_linear_velocity, and the 2026-11-10
+# long run policies indeed did not step at 0.08 (0.00 m in 15 s). JDUCK_CMD rescales the tracking
+# stds ∝ the range (same stand-still payoff fraction at the range's edge) unless JDUCK_LIN_STD /
+# JDUCK_ANG_STD set them explicitly. Adds `_cmd<vx>-<vy>-<wz>` (and `_ls<std>` / `_as<std>`) to the name.
+_cmd = os.environ.get("JDUCK_CMD", "")
+if _cmd:
+    _vx, _vy, _wz = (float(x) for x in _cmd.split(","))
+    JDUCK_LIN_STD = 0.198 * _vx / 0.25
+    JDUCK_ANG_STD = 0.566 * _wz / 0.8
+    JDUCK_LIN_VEL_X, JDUCK_LIN_VEL_Y, JDUCK_ANG_VEL_Z = (-_vx, _vx), (-_vy, _vy), (-_wz, _wz)
+if os.environ.get("JDUCK_LIN_STD"):
+    JDUCK_LIN_STD = float(os.environ["JDUCK_LIN_STD"])
+if os.environ.get("JDUCK_ANG_STD"):
+    JDUCK_ANG_STD = float(os.environ["JDUCK_ANG_STD"])
 
 # Final head-pose command caps (deltas from HOME=0), kept ~10% inside the URDF
 # limits. The limits are asymmetric, so take the smaller side to stay symmetric.
@@ -629,6 +645,12 @@ if os.environ.get("JDUCK_TORQUE_DR"):
     JduckRlCfg.experiment_name += f"_tdr{JDUCK_TORQUE_SCALE[0]:g}-{JDUCK_TORQUE_SCALE[1]:g}"
 if JDUCK_GYRO_NOISE > 0:
     JduckRlCfg.experiment_name += f"_gn{JDUCK_GYRO_NOISE:g}"
+if os.environ.get("JDUCK_CMD"):
+    JduckRlCfg.experiment_name += "_cmd" + "-".join(f"{float(x):g}" for x in os.environ["JDUCK_CMD"].split(","))
+if os.environ.get("JDUCK_LIN_STD"):
+    JduckRlCfg.experiment_name += f"_ls{float(os.environ['JDUCK_LIN_STD']):g}"
+if os.environ.get("JDUCK_ANG_STD"):
+    JduckRlCfg.experiment_name += f"_as{float(os.environ['JDUCK_ANG_STD']):g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

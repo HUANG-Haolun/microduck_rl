@@ -58,6 +58,9 @@ elif [[ "$exp" =~ _k([0-9.]+)ff([0-9.]+)db([0-9.]+) ]]; then
     envs+=("JDUCK_FW=${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]}")
 fi
 [[ "$exp" =~ _gn([0-9.]+) ]] && envs+=("JDUCK_GYRO_NOISE=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _cmd([0-9.]+)-([0-9.]+)-([0-9.]+) ]] && envs+=("JDUCK_CMD=${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]}")
+[[ "$exp" =~ _ls([0-9.]+) ]] && envs+=("JDUCK_LIN_STD=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _as([0-9.]+) ]] && envs+=("JDUCK_ANG_STD=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _dl([0-9]+)-([0-9]+) ]] && envs+=("JDUCK_ACT_DELAY=${BASH_REMATCH[1]},${BASH_REMATCH[2]}")
 [[ "$exp" =~ _tdr([0-9.]+)-([0-9.]+) ]] && envs+=("JDUCK_TORQUE_DR=${BASH_REMATCH[1]},${BASH_REMATCH[2]}")
 [[ "$exp" =~ _t([0-9.]+) ]] && envs+=("JDUCK_TORQUE=${BASH_REMATCH[1]}")

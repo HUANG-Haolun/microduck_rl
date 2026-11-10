@@ -150,9 +150,17 @@ JDUCK_FW_LAW["quantize"] = os.environ.get("JDUCK_QUANT", "1") != "0"
 if not JDUCK_FW_LAW["quantize"]:
     JDUCK_FW_TAG += "_noquant"
 
+# Command delay in physics steps (5 ms each). Default 1–3. JDUCK_ACT_DELAY=<min>,<max>
+# overrides it: the robot log (jduck_tools/real_calib.py, 2026-11-10) fits best with
+# ~10 ms more than the default. Adds `_dl<min>-<max>` to the firmware tag.
+_dl = os.environ.get("JDUCK_ACT_DELAY", "")
+JDUCK_ACT_DELAY = tuple(int(x) for x in _dl.split(",")) if _dl else (1, 3)
+if _dl:
+    JDUCK_FW_TAG += f"_dl{JDUCK_ACT_DELAY[0]}-{JDUCK_ACT_DELAY[1]}"
+
 if JDUCK_ACTUATOR == "ubt12hc":
-    # Command delay: 1–3 physics steps (5–15 ms). The serial round trip for 14
-    # servos at 230400 baud is ~10 ms.
+    # Command delay: 1–3 physics steps (5–15 ms) by default. The serial round trip for 14
+    # servos at 230400 baud is ~10 ms (measured on the robot: 1.29 ms per servo).
     jduck_actuators = Ubt12hcActuatorCfg(
         target_names_expr=_SERVO_JOINTS,
         stiffness=0.0,
@@ -166,8 +174,8 @@ if JDUCK_ACTUATOR == "ubt12hc":
         # while 0.05 already lets it sit quiet (leg |qd| 0.0015). Real geared hobby
         # servos are usually ≥0.05 N·m; measure it on the bench (calibrate.py).
         frictionloss=float(os.environ.get("JDUCK_FRICTION", "0.01")),
-        delay_min_lag=1,
-        delay_max_lag=3,
+        delay_min_lag=JDUCK_ACT_DELAY[0],
+        delay_max_lag=JDUCK_ACT_DELAY[1],
         **JDUCK_FW_LAW,
     )
 else:

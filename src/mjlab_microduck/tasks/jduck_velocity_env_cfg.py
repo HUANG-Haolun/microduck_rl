@@ -619,6 +619,8 @@ if JDUCK_FRICTION_SCALE:
     JduckRlCfg.experiment_name += f"_frdr{JDUCK_FRICTION_SCALE[0]:g}-{JDUCK_FRICTION_SCALE[1]:g}"
 if JDUCK_KP_SCALE:
     JduckRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
+if os.environ.get("JDUCK_TORQUE_DR"):
+    JduckRlCfg.experiment_name += f"_tdr{JDUCK_TORQUE_SCALE[0]:g}-{JDUCK_TORQUE_SCALE[1]:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

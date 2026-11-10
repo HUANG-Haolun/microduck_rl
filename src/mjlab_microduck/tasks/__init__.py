@@ -189,6 +189,17 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
+from .jduck_ball_kick_env_cfg import JduckBallKickRlCfg, make_jduck_ball_kick_env_cfg
+
+# jduck ball kick (JDUCK_KICK_FOOT=right|left), modified servo firmware.
+register_mjlab_task(
+    task_id="Mjlab-BallKick-Flat-JDuck",
+    env_cfg=make_jduck_ball_kick_env_cfg(),
+    play_env_cfg=make_jduck_ball_kick_env_cfg(play=True),
+    rl_cfg=JduckBallKickRlCfg,
+    runner_cls=MicroduckOnPolicyRunner,
+)
+
 # Ground-pick task — crouch, touch the ground with the mouth tip, return to stand
 register_mjlab_task(
     task_id="Mjlab-GroundPick-Flat-MicroDuck",

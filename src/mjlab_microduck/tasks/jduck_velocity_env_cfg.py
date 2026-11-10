@@ -69,6 +69,9 @@ if os.environ.get("JDUCK_LIN_STD"):
     JDUCK_LIN_STD = float(os.environ["JDUCK_LIN_STD"])
 if os.environ.get("JDUCK_ANG_STD"):
     JDUCK_ANG_STD = float(os.environ["JDUCK_ANG_STD"])
+# JDUCK_LIN_REL_W=<weight>: add track_lin_vel_rel_ema (relative error on a 0.5 s EMA of v_xy,
+# rel_std 0.5, floor 0.04 m/s). Adds `_lrel<w>` to the name.
+JDUCK_LIN_REL_W = float(os.environ.get("JDUCK_LIN_REL_W", "0"))
 # JDUCK_CMD_CURR=<iter>: train with the DEFAULT ranges/stds (0.25,0.15,0.8 / 0.198,0.566) until <iter>,
 # then switch to JDUCK_CMD / JDUCK_LIN_STD (lin std via a midway step at <iter>+1000). O5a/O5b
 # (narrow range + std 0.06 from step 0) never learned to step: air_time stayed 0.01 vs O1's 0.36
@@ -367,6 +370,41 @@ class track_yaw_rate_ema:
         return torch.exp(-torch.square(cmd[:, 2] - self.ema) / std**2)
 
 
+class track_lin_vel_rel_ema:
+    """exp(−(|cmd_xy − EMA(v_xy)| / max(|cmd_xy|, floor))² / rel_std²), only while |cmd_xy| > 0.01.
+
+    Relative-error linear tracking on a moving-averaged body velocity (EMA `tau` s, like the yaw
+    term). The Gaussian on the ABSOLUTE error cannot serve the board's 0.08 m/s keys: std 0.198
+    pays 85 % for standing still (O1–O4: no steps at 0.08), std 0.045 has no gradient once the gait
+    exists (O7a: track_linear_velocity fell 1.2 → 0.26 after the switch and stayed). With a relative
+    error, standing still on any command costs the full term while 75 % of the speed keeps ~78 %.
+    """
+
+    def __init__(self, cfg, env):
+        import torch
+
+        self.ema = torch.zeros(env.num_envs, 2, device=env.device)
+        self.alpha = min(1.0, env.step_dt / cfg.params["tau"])
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            self.ema[:] = 0.0
+        else:
+            self.ema[env_ids] = 0.0
+
+    def __call__(self, env, rel_std: float, tau: float, floor: float = 0.04, command_name: str = "twist",
+                 asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+        import torch
+
+        del tau
+        v = env.scene[asset_cfg.name].data.root_link_lin_vel_b[:, :2]
+        self.ema += self.alpha * (v - self.ema)
+        cmd = env.command_manager.get_command(command_name)[:, :2]
+        mag = cmd.norm(dim=1)
+        rel = (cmd - self.ema).norm(dim=1) / torch.clamp(mag, min=floor)
+        return torch.where(mag > 0.01, torch.exp(-torch.square(rel) / rel_std**2), torch.zeros_like(mag))
+
+
 def quiet_actions_when_standing(
     env,
     s2: float,
@@ -644,6 +682,10 @@ def make_jduck_velocity_env_cfg(
             func=microduck_mdp.velocity_tracking_std_curriculum,
             params={"reward_name": "track_angular_velocity", "std_stages": [
                 {"step": 0, "std": 0.566}, {"step": t0, "std": JDUCK_ANG_STD}]})
+    if JDUCK_LIN_REL_W > 0:
+        cfg.rewards["track_lin_vel_rel"] = RewardTermCfg(
+            func=track_lin_vel_rel_ema, weight=JDUCK_LIN_REL_W,
+            params={"rel_std": 0.5, "tau": 0.5, "floor": 0.04, "command_name": "twist"})
     if JDUCK_GYRO_NOISE > 0:
         from mjlab.utils.noise import UniformNoiseCfg as _Un
         cfg.observations["actor"].terms["base_ang_vel"].noise = _Un(n_min=-JDUCK_GYRO_NOISE, n_max=JDUCK_GYRO_NOISE)
@@ -696,6 +738,8 @@ if os.environ.get("JDUCK_ANG_STD"):
     JduckRlCfg.experiment_name += f"_as{float(os.environ['JDUCK_ANG_STD']):g}"
 if JDUCK_CMD_CURR > 0:
     JduckRlCfg.experiment_name += f"_cc{JDUCK_CMD_CURR}"
+if JDUCK_LIN_REL_W > 0:
+    JduckRlCfg.experiment_name += f"_lrel{JDUCK_LIN_REL_W:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

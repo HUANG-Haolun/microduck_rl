@@ -168,6 +168,9 @@ JDUCK_QD_EMA = float(os.environ.get("JDUCK_QD_EMA", "1"))
 # straight with fresh obs (p10: dx +4.4 m, yaw ≈ 0) veer and spin with the stale ones
 # (dx −0.4…+1.6 m, yaw −50…−240°). Adds `_lag1`.
 JDUCK_OBS_LAG = int(os.environ.get("JDUCK_OBS_LAG", "0"))
+# JDUCK_GYRO_NOISE=<rad/s>: uniform ± noise on the actor's gyro obs (default 0.03, microduck's).
+# The robot's gyro swings 0.13–0.37 rad/s (std) while standing (2026-11-10 stand log).
+JDUCK_GYRO_NOISE = float(os.environ.get("JDUCK_GYRO_NOISE", "0"))
 
 # CAPS action-smoothness regularization in PPO (tasks/ppo_caps.py). With
 # JDUCK_OBS_ADC=1 the policy still jitters ~2°/step at zero command in its own
@@ -582,6 +585,9 @@ def make_jduck_velocity_env_cfg(
     cfg.curriculum["head_pose_range"].params["range_stages"] = [
         {**s, "ranges": _clip_ranges(s["ranges"], JDUCK_HEAD_CAPS)} for s in stages
     ]
+    if JDUCK_GYRO_NOISE > 0:
+        from mjlab.utils.noise import UniformNoiseCfg as _Un
+        cfg.observations["actor"].terms["base_ang_vel"].noise = _Un(n_min=-JDUCK_GYRO_NOISE, n_max=JDUCK_GYRO_NOISE)
 
     return cfg
 
@@ -621,6 +627,8 @@ if JDUCK_KP_SCALE:
     JduckRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
 if os.environ.get("JDUCK_TORQUE_DR"):
     JduckRlCfg.experiment_name += f"_tdr{JDUCK_TORQUE_SCALE[0]:g}-{JDUCK_TORQUE_SCALE[1]:g}"
+if JDUCK_GYRO_NOISE > 0:
+    JduckRlCfg.experiment_name += f"_gn{JDUCK_GYRO_NOISE:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

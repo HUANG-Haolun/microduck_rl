@@ -45,6 +45,8 @@ case "$exp" in
     jduck_sitstand_ubt12hc*) envs=(JDUCK_ACTUATOR=ubt12hc) ;;
     jduck_standup_ubt12hc*)  envs=(JDUCK_ACTUATOR=ubt12hc) ;;
     jduck_velstand_ubt12hc*) envs=(JDUCK_ACTUATOR=ubt12hc JDUCK_ANG_EMA=0.5 JDUCK_STAND_QUIET=4 JDUCK_STAND_QUIET_S2=1) ;;
+    jduck_ball_kick_right_ubt12hc*) envs=(JDUCK_ACTUATOR=ubt12hc JDUCK_KICK_FOOT=right) ;;
+    jduck_ball_kick_left_ubt12hc*)  envs=(JDUCK_ACTUATOR=ubt12hc JDUCK_KICK_FOOT=left) ;;
     *) echo "不认识的实验名：$exp（不是 jduck 训练？）" >&2; exit 1 ;;
 esac
 [[ "$exp" =~ _home(new|old) ]] && envs+=("JDUCK_HOME=${BASH_REMATCH[1]}")
@@ -91,6 +93,7 @@ task=Mjlab-Velocity-Flat-JDuck
 [[ "$exp" == jduck_sitstand_* ]] && task=Mjlab-SitStand-Flat-JDuck
 [[ "$exp" == jduck_standup_* ]] && task=Mjlab-StandUp-Flat-JDuck
 [[ "$exp" == jduck_velstand_* ]] && task=Mjlab-VelStand-Flat-JDuck
+[[ "$exp" == jduck_ball_kick_* ]] && task=Mjlab-BallKick-Flat-JDuck
 env "${envs[@]}" WANDB_MODE=offline uv run --frozen scripts/export.py $task \
     --checkpoint-file "$ckpt" --onnx-file "$out" > /tmp/jduck_export.log 2>&1 \
     || { echo "导出失败，日志：/tmp/jduck_export.log" >&2; tail -20 /tmp/jduck_export.log >&2; exit 1; }
@@ -105,6 +108,10 @@ EOF
 if [[ "$exp" == jduck_velstand_* ]]; then
     fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p')
     play="uv run --frozen scripts/infer_policy.py --robot jduck --walking $out --jduck-fw $fw --scene ../../jduck_mjcf/scene_groundcontact_view.xml"
+    evalarg=""
+elif [[ "$exp" == jduck_ball_kick_* ]]; then
+    fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p')
+    play="uv run --frozen scripts/infer_policy.py --robot jduck --kick-right $out --jduck-fw $fw   # K = 右脚踢（需要配一个走路/站立模型）"
     evalarg=""
 elif [[ "$exp" == jduck_standup_* ]]; then
     fw=$(printf '%s\n' "${envs[@]}" | sed -n 's/^JDUCK_FW=//p')

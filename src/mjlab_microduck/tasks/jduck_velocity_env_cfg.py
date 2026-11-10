@@ -69,6 +69,26 @@ if os.environ.get("JDUCK_LIN_STD"):
     JDUCK_LIN_STD = float(os.environ["JDUCK_LIN_STD"])
 if os.environ.get("JDUCK_ANG_STD"):
     JDUCK_ANG_STD = float(os.environ["JDUCK_ANG_STD"])
+# JDUCK_CMD_CURR=<iter>: train with the DEFAULT ranges/stds (0.25,0.15,0.8 / 0.198,0.566) until <iter>,
+# then switch to JDUCK_CMD / JDUCK_LIN_STD (lin std via a midway step at <iter>+1000). O5a/O5b
+# (narrow range + std 0.06 from step 0) never learned to step: air_time stayed 0.01 vs O1's 0.36
+# at 1000 — a tight std gives no gradient before there is a gait. Adds `_cc<iter>` to the name.
+JDUCK_CMD_CURR = int(os.environ.get("JDUCK_CMD_CURR", "0"))
+
+
+def jduck_command_ranges_curriculum(env, env_ids, command_name: str, stages: list[dict]):
+    """Per-axis command ranges by training step: stages = [{step, vx, vy, wz}, ...] (symmetric ±)."""
+    import torch
+    del env_ids
+    cfg = env.command_manager.get_term(command_name).cfg
+    cur = stages[0]
+    for st in stages:
+        if env.common_step_counter > st["step"]:
+            cur = st
+    cfg.ranges.lin_vel_x = (-cur["vx"], cur["vx"])
+    cfg.ranges.lin_vel_y = (-cur["vy"], cur["vy"])
+    cfg.ranges.ang_vel_z = (-cur["wz"], cur["wz"])
+    return torch.tensor([cur["vx"]])
 
 # Final head-pose command caps (deltas from HOME=0), kept ~10% inside the URDF
 # limits. The limits are asymmetric, so take the smaller side to stay symmetric.
@@ -601,6 +621,29 @@ def make_jduck_velocity_env_cfg(
     cfg.curriculum["head_pose_range"].params["range_stages"] = [
         {**s, "ranges": _clip_ranges(s["ranges"], JDUCK_HEAD_CAPS)} for s in stages
     ]
+    if JDUCK_CMD_CURR > 0:
+        from mjlab.managers import CurriculumTermCfg as _CT
+        n = 24                                  # env steps per iteration
+        t0, t1 = JDUCK_CMD_CURR * n, (JDUCK_CMD_CURR + 1000) * n
+        d = dict(vx=0.25, vy=0.15, wz=0.8)
+        tgt = dict(vx=JDUCK_LIN_VEL_X[1], vy=JDUCK_LIN_VEL_Y[1], wz=JDUCK_ANG_VEL_Z[1])
+        cfg.commands["twist"].ranges.lin_vel_x = (-d["vx"], d["vx"])
+        cfg.commands["twist"].ranges.lin_vel_y = (-d["vy"], d["vy"])
+        cfg.commands["twist"].ranges.ang_vel_z = (-d["wz"], d["wz"])
+        cfg.curriculum["jduck_cmd_ranges"] = _CT(
+            func=jduck_command_ranges_curriculum,
+            params={"command_name": "twist", "stages": [{"step": 0, **d}, {"step": t0, **tgt}]})
+        cfg.rewards["track_linear_velocity"].params["std"] = 0.198
+        cfg.curriculum["jduck_lin_std"] = _CT(
+            func=microduck_mdp.velocity_tracking_std_curriculum,
+            params={"reward_name": "track_linear_velocity", "std_stages": [
+                {"step": 0, "std": 0.198}, {"step": t0, "std": (0.198 + JDUCK_LIN_STD) / 2}, {"step": t1, "std": JDUCK_LIN_STD}]})
+        _ang = cfg.rewards["track_angular_velocity"]
+        _ang.params["std"] = 0.566
+        cfg.curriculum["jduck_ang_std"] = _CT(
+            func=microduck_mdp.velocity_tracking_std_curriculum,
+            params={"reward_name": "track_angular_velocity", "std_stages": [
+                {"step": 0, "std": 0.566}, {"step": t0, "std": JDUCK_ANG_STD}]})
     if JDUCK_GYRO_NOISE > 0:
         from mjlab.utils.noise import UniformNoiseCfg as _Un
         cfg.observations["actor"].terms["base_ang_vel"].noise = _Un(n_min=-JDUCK_GYRO_NOISE, n_max=JDUCK_GYRO_NOISE)
@@ -651,6 +694,8 @@ if os.environ.get("JDUCK_LIN_STD"):
     JduckRlCfg.experiment_name += f"_ls{float(os.environ['JDUCK_LIN_STD']):g}"
 if os.environ.get("JDUCK_ANG_STD"):
     JduckRlCfg.experiment_name += f"_as{float(os.environ['JDUCK_ANG_STD']):g}"
+if JDUCK_CMD_CURR > 0:
+    JduckRlCfg.experiment_name += f"_cc{JDUCK_CMD_CURR}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

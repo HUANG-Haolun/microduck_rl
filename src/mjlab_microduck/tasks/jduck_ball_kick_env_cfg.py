@@ -128,3 +128,46 @@ if JDUCK_KP_SCALE:
     JduckBallKickRlCfg.experiment_name += f"_kpdr{JDUCK_KP_SCALE[0]:g}-{JDUCK_KP_SCALE[1]:g}"
 JduckBallKickRlCfg.run_name = JduckBallKickRlCfg.experiment_name
 JduckBallKickRlCfg.max_iterations = 5000
+
+
+# ── Aim and power (jbk2) ─────────────────────────────────────────────────────
+# jbk1 kicked 100 % but 17° off-axis at 1.5 m/s (target 1.0): ball_forward_velocity
+# only counts the forward component (17° off still pays cos 17° = 96 %), and the
+# overshoot penalty (−4, also forward-only) is cheap next to the longer roll a harder
+# kick buys. JDUCK_KICK_LAT_W charges the ball's speed ACROSS the kick direction
+# (1 m/s at 17° → 0.29 m/s lateral); JDUCK_KICK_OVER_W replaces the overshoot weight.
+# Both stay below the forward reward's 12 so "kick roughly right" still beats "don't kick".
+JDUCK_KICK_LAT_W = float(os.environ.get("JDUCK_KICK_LAT_W", "0"))
+JDUCK_KICK_OVER_W = float(os.environ.get("JDUCK_KICK_OVER_W", "0"))
+
+
+def ball_lateral_speed(env, asset_name: str = "ball", max_speed: float = 5.0):
+    import torch
+
+    ball = env.scene[asset_name]
+    v = ball.data.root_link_lin_vel_w[:, :2]
+    d = microduck_mdp._ball_kick_dir(env)
+    lat = v[:, 0] * d[:, 1] - v[:, 1] * d[:, 0]
+    return torch.nan_to_num(lat.abs(), nan=0.0).clamp(0.0, max_speed)
+
+
+_make_base = make_jduck_ball_kick_env_cfg
+
+
+def make_jduck_ball_kick_env_cfg(play: bool = False):   # noqa: F811
+    cfg = _make_base(play=play)
+    if JDUCK_KICK_LAT_W > 0:
+        from mjlab.managers import RewardTermCfg
+
+        cfg.rewards["ball_lateral_speed"] = RewardTermCfg(
+            func=ball_lateral_speed, weight=-JDUCK_KICK_LAT_W, params={"asset_name": "ball"})
+    if JDUCK_KICK_OVER_W > 0:
+        cfg.rewards["ball_speed_overshoot"].weight = -JDUCK_KICK_OVER_W
+    return cfg
+
+
+if JDUCK_KICK_LAT_W > 0:
+    JduckBallKickRlCfg.experiment_name += f"_lat{JDUCK_KICK_LAT_W:g}"
+if JDUCK_KICK_OVER_W > 0:
+    JduckBallKickRlCfg.experiment_name += f"_over{JDUCK_KICK_OVER_W:g}"
+JduckBallKickRlCfg.run_name = JduckBallKickRlCfg.experiment_name

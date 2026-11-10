@@ -50,6 +50,8 @@ case "$exp" in
     *) echo "不认识的实验名：$exp（不是 jduck 训练？）" >&2; exit 1 ;;
 esac
 [[ "$exp" =~ _home(new|old) ]] && envs+=("JDUCK_HOME=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _lat([0-9.]+) ]] && envs+=("JDUCK_KICK_LAT_W=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _over([0-9.]+) ]] && envs+=("JDUCK_KICK_OVER_W=${BASH_REMATCH[1]}")
 if [[ "$exp" =~ _k([0-9.]+)ff([0-9.]+)db([0-9.]+)fl([0-9.]+) ]]; then
     envs+=("JDUCK_FW=${BASH_REMATCH[1]},${BASH_REMATCH[2]},${BASH_REMATCH[3]},${BASH_REMATCH[4]}")
 elif [[ "$exp" =~ _k([0-9.]+)ff([0-9.]+)db([0-9.]+) ]]; then

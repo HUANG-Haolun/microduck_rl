@@ -79,6 +79,10 @@ JDUCK_LIN_REL_W = float(os.environ.get("JDUCK_LIN_REL_W", "0"))
 JDUCK_CMD_CURR = int(os.environ.get("JDUCK_CMD_CURR", "0"))
 # JDUCK_CMD_STAGED=1: do that switch in three steps (CURR, +500, +1000) instead of at once. `_st` in the name.
 JDUCK_CMD_STAGED = os.environ.get("JDUCK_CMD_STAGED", "0") == "1"
+# JDUCK_POSE_STAND_STD=<rad>: zero-command pose-reward std for hip_pitch and knee (default 0.15, microduck's).
+# O8d/O11a/O12a stood with hip pitch ±8–13° and bent knees (gate 5°): at 0.15 an 8° offset still keeps
+# 42 % of the pose term; at 0.07 it keeps 2 %. Walking stds unchanged. Adds `_ps<std>` to the name.
+JDUCK_POSE_STAND_STD = float(os.environ.get("JDUCK_POSE_STAND_STD", "0"))
 
 
 def jduck_command_ranges_curriculum(env, env_ids, command_name: str, stages: list[dict]):
@@ -694,6 +698,12 @@ def make_jduck_velocity_env_cfg(
         cfg.curriculum["jduck_ang_std"] = _CT(
             func=microduck_mdp.velocity_tracking_std_curriculum,
             params={"reward_name": "track_angular_velocity", "std_stages": ang_st})
+    if JDUCK_POSE_STAND_STD > 0:
+        sd = dict(cfg.rewards["pose"].params["std_standing"])
+        for k in list(sd):
+            if "hip_pitch" in k or "knee" in k:
+                sd[k] = JDUCK_POSE_STAND_STD
+        cfg.rewards["pose"].params["std_standing"] = sd
     if JDUCK_LIN_REL_W > 0:
         cfg.rewards["track_lin_vel_rel"] = RewardTermCfg(
             func=track_lin_vel_rel_ema, weight=JDUCK_LIN_REL_W,
@@ -752,6 +762,8 @@ if JDUCK_CMD_CURR > 0:
     JduckRlCfg.experiment_name += f"_cc{JDUCK_CMD_CURR}" + ("st" if JDUCK_CMD_STAGED else "")
 if JDUCK_LIN_REL_W > 0:
     JduckRlCfg.experiment_name += f"_lrel{JDUCK_LIN_REL_W:g}"
+if JDUCK_POSE_STAND_STD > 0:
+    JduckRlCfg.experiment_name += f"_ps{JDUCK_POSE_STAND_STD:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

@@ -82,6 +82,10 @@ JDUCK_CMD_STAGED = os.environ.get("JDUCK_CMD_STAGED", "0") == "1"
 # JDUCK_STANCE_W=<w>: add stance_product_when_standing (hip_pitch + knee, std JDUCK_STANCE_STD, default 0.07).
 # Adds `_sp<w>` to the name.
 JDUCK_STANCE_W = float(os.environ.get("JDUCK_STANCE_W", "0"))
+# JDUCK_HEADING_W=<w>: add heading_hold (integrated yaw error since the last command change, std
+# JDUCK_HEADING_STD rad, default 0.2). Adds `_hh<w>` to the name.
+JDUCK_HEADING_W = float(os.environ.get("JDUCK_HEADING_W", "0"))
+JDUCK_HEADING_STD = float(os.environ.get("JDUCK_HEADING_STD", "0.2"))
 JDUCK_STANCE_STD = float(os.environ.get("JDUCK_STANCE_STD", "0.07"))
 # JDUCK_POSE_STAND_STD=<rad>: zero-command pose-reward std for hip_pitch and knee (default 0.15, microduck's).
 # O8d/O11a/O12a stood with hip pitch ±8–13° and bent knees (gate 5°): at 0.15 an 8° offset still keeps
@@ -415,6 +419,40 @@ class track_lin_vel_rel_ema:
         return torch.where(mag > 0.01, torch.exp(-torch.square(rel) / rel_std**2), torch.zeros_like(mag))
 
 
+class heading_hold:
+    """exp(−e² / std²), e = ∫ (wz_cmd − wz) dt since the twist command last changed (reset on change/episode).
+
+    The yaw-rate term cannot see a slow drift: walking 0.08 m/s with a steady 0.066 rad/s error (57° in the
+    15 s eval) keeps exp(−0.066²/0.12²) = 74 % of track_angular_velocity every step. Five failures in a row
+    on yaw (O14a–e: 30–74°). An integrated heading error grows until it costs the whole term: std 0.2 rad
+    → 11° keeps 37 %, 30° keeps 6 %. Applies to every command, including zero and pure turns.
+    """
+
+    def __init__(self, cfg, env):
+        import torch
+
+        self.err = torch.zeros(env.num_envs, device=env.device)
+        self.last = torch.zeros(env.num_envs, 3, device=env.device)
+        self.dt = env.step_dt
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            self.err[:] = 0.0
+        else:
+            self.err[env_ids] = 0.0
+
+    def __call__(self, env, std: float, command_name: str = "twist", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+        import torch
+
+        cmd = env.command_manager.get_command(command_name)
+        changed = (cmd - self.last).abs().sum(dim=1) > 1e-6
+        self.last = cmd.clone()
+        self.err = torch.where(changed, torch.zeros_like(self.err), self.err)
+        wz = env.scene[asset_cfg.name].data.root_link_ang_vel_b[:, 2]
+        self.err += (cmd[:, 2] - wz) * self.dt
+        return torch.exp(-torch.square(self.err) / std**2)
+
+
 def quiet_actions_when_standing(
     env,
     s2: float,
@@ -740,6 +778,9 @@ def make_jduck_velocity_env_cfg(
         cfg.rewards["track_lin_vel_rel"] = RewardTermCfg(
             func=track_lin_vel_rel_ema, weight=JDUCK_LIN_REL_W,
             params={"rel_std": 0.5, "tau": 0.5, "floor": 0.04, "command_name": "twist"})
+    if JDUCK_HEADING_W > 0:
+        cfg.rewards["heading_hold"] = RewardTermCfg(
+            func=heading_hold, weight=JDUCK_HEADING_W, params={"std": JDUCK_HEADING_STD, "command_name": "twist"})
     if JDUCK_GYRO_NOISE > 0:
         from mjlab.utils.noise import UniformNoiseCfg as _Un
         cfg.observations["actor"].terms["base_ang_vel"].noise = _Un(n_min=-JDUCK_GYRO_NOISE, n_max=JDUCK_GYRO_NOISE)
@@ -798,6 +839,8 @@ if JDUCK_POSE_STAND_STD > 0:
     JduckRlCfg.experiment_name += f"_ps{JDUCK_POSE_STAND_STD:g}"
 if JDUCK_STANCE_W > 0:
     JduckRlCfg.experiment_name += f"_sp{JDUCK_STANCE_W:g}" + (f"s{JDUCK_STANCE_STD:g}" if JDUCK_STANCE_STD != 0.07 else "")
+if JDUCK_HEADING_W > 0:
+    JduckRlCfg.experiment_name += f"_hh{JDUCK_HEADING_W:g}" + (f"s{JDUCK_HEADING_STD:g}" if JDUCK_HEADING_STD != 0.2 else "")
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

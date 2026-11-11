@@ -79,6 +79,10 @@ JDUCK_LIN_REL_W = float(os.environ.get("JDUCK_LIN_REL_W", "0"))
 JDUCK_CMD_CURR = int(os.environ.get("JDUCK_CMD_CURR", "0"))
 # JDUCK_CMD_STAGED=1: do that switch in three steps (CURR, +500, +1000) instead of at once. `_st` in the name.
 JDUCK_CMD_STAGED = os.environ.get("JDUCK_CMD_STAGED", "0") == "1"
+# JDUCK_STANCE_W=<w>: add stance_product_when_standing (hip_pitch + knee, std JDUCK_STANCE_STD, default 0.07).
+# Adds `_sp<w>` to the name.
+JDUCK_STANCE_W = float(os.environ.get("JDUCK_STANCE_W", "0"))
+JDUCK_STANCE_STD = float(os.environ.get("JDUCK_STANCE_STD", "0.07"))
 # JDUCK_POSE_STAND_STD=<rad>: zero-command pose-reward std for hip_pitch and knee (default 0.15, microduck's).
 # O8d/O11a/O12a stood with hip pitch ±8–13° and bent knees (gate 5°): at 0.15 an 8° offset still keeps
 # 42 % of the pose term; at 0.07 it keeps 2 %. Walking stds unchanged. Adds `_ps<std>` to the name.
@@ -426,6 +430,29 @@ def quiet_actions_when_standing(
     return standing * torch.exp(-torch.sum(da ** 2, dim=-1) / s2)
 
 
+def stance_product_when_standing(
+    env,
+    std: float,
+    command_name: str = "twist",
+    command_threshold: float = 0.01,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=(r".*hip_pitch.*", r".*knee.*")),
+):
+    """Π_j exp(−(q_j − q_home,j)² / std²) over hip_pitch and knee, only while the twist command is ~0.
+
+    A PRODUCT over joints: the stock pose term averages the error over all 10 leg joints first, so one
+    hip pitch 12° off with the rest at HOME still keeps 41 % of it at std 0.07 (O12a/O12b/O13a stood that
+    way, gate 5°). Here that single joint takes the whole term to ~0.
+    """
+    import torch
+
+    cmd = env.command_manager.get_command(command_name)
+    standing = (torch.norm(cmd[:, :2], dim=1) + torch.abs(cmd[:, 2]) < command_threshold).float()
+    asset = env.scene[asset_cfg.name]
+    ids = asset_cfg.joint_ids
+    err = asset.data.joint_pos[:, ids] - asset.data.default_joint_pos[:, ids]
+    return standing * torch.exp(-torch.sum(torch.square(err), dim=-1) / std**2)
+
+
 class _AdcJointState:
     """Per-env ADC encoder model shared by the two actor obs terms below.
 
@@ -698,6 +725,11 @@ def make_jduck_velocity_env_cfg(
         cfg.curriculum["jduck_ang_std"] = _CT(
             func=microduck_mdp.velocity_tracking_std_curriculum,
             params={"reward_name": "track_angular_velocity", "std_stages": ang_st})
+    if JDUCK_STANCE_W > 0:
+        cfg.rewards["stance_product"] = RewardTermCfg(
+            func=stance_product_when_standing, weight=JDUCK_STANCE_W,
+            params={"std": JDUCK_STANCE_STD, "command_threshold": 0.01,
+                    "asset_cfg": SceneEntityCfg("robot", joint_names=(r".*hip_pitch.*", r".*knee.*"))})
     if JDUCK_POSE_STAND_STD > 0:
         sd = dict(cfg.rewards["pose"].params["std_standing"])
         for k in list(sd):
@@ -764,6 +796,8 @@ if JDUCK_LIN_REL_W > 0:
     JduckRlCfg.experiment_name += f"_lrel{JDUCK_LIN_REL_W:g}"
 if JDUCK_POSE_STAND_STD > 0:
     JduckRlCfg.experiment_name += f"_ps{JDUCK_POSE_STAND_STD:g}"
+if JDUCK_STANCE_W > 0:
+    JduckRlCfg.experiment_name += f"_sp{JDUCK_STANCE_W:g}" + (f"s{JDUCK_STANCE_STD:g}" if JDUCK_STANCE_STD != 0.07 else "")
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _PpoCfg
     from dataclasses import dataclass as _dc

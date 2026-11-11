@@ -65,6 +65,7 @@ fi
 [[ "$exp" =~ _cc[0-9]+st ]] && envs+=("JDUCK_CMD_STAGED=1")
 [[ "$exp" =~ _lrel([0-9.]+) ]] && envs+=("JDUCK_LIN_REL_W=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _ps([0-9.]+) ]] && envs+=("JDUCK_POSE_STAND_STD=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _sp([0-9.]+)(s([0-9.]+))? ]] && { envs+=("JDUCK_STANCE_W=${BASH_REMATCH[1]}"); [ -n "${BASH_REMATCH[3]}" ] && envs+=("JDUCK_STANCE_STD=${BASH_REMATCH[3]}"); }
 [[ "$exp" =~ _dl([0-9]+)-([0-9]+) ]] && envs+=("JDUCK_ACT_DELAY=${BASH_REMATCH[1]},${BASH_REMATCH[2]}")
 [[ "$exp" =~ _tdr([0-9.]+)-([0-9.]+) ]] && envs+=("JDUCK_TORQUE_DR=${BASH_REMATCH[1]},${BASH_REMATCH[2]}")
 [[ "$exp" =~ _t([0-9.]+) ]] && envs+=("JDUCK_TORQUE=${BASH_REMATCH[1]}")

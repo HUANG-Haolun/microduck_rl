@@ -77,6 +77,8 @@ JDUCK_LIN_REL_W = float(os.environ.get("JDUCK_LIN_REL_W", "0"))
 # (narrow range + std 0.06 from step 0) never learned to step: air_time stayed 0.01 vs O1's 0.36
 # at 1000 — a tight std gives no gradient before there is a gait. Adds `_cc<iter>` to the name.
 JDUCK_CMD_CURR = int(os.environ.get("JDUCK_CMD_CURR", "0"))
+# JDUCK_CMD_STAGED=1: do that switch in three steps (CURR, +500, +1000) instead of at once. `_st` in the name.
+JDUCK_CMD_STAGED = os.environ.get("JDUCK_CMD_STAGED", "0") == "1"
 
 
 def jduck_command_ranges_curriculum(env, env_ids, command_name: str, stages: list[dict]):
@@ -668,20 +670,30 @@ def make_jduck_velocity_env_cfg(
         cfg.commands["twist"].ranges.lin_vel_x = (-d["vx"], d["vx"])
         cfg.commands["twist"].ranges.lin_vel_y = (-d["vy"], d["vy"])
         cfg.commands["twist"].ranges.ang_vel_z = (-d["wz"], d["wz"])
+        if JDUCK_CMD_STAGED:
+            # three equal steps at CURR, CURR+500, CURR+1000 for ranges and both stds; yaw std via 0.25
+            # (O11a: fell_over 0.38 → 2.5 right after the one-shot switch at 1500, ang std 0.566 → 0.12)
+            ts = [t0, (JDUCK_CMD_CURR + 500) * n, t1]
+            mix = lambda a, b, f: a + (b - a) * f  # noqa: E731
+            rng_st = [{"step": 0, **d}] + [{"step": ts[i], **{k: mix(d[k], tgt[k], (i + 1) / 3) for k in d}} for i in range(3)]
+            lin_st = [{"step": 0, "std": 0.198}] + [{"step": ts[i], "std": mix(0.198, JDUCK_LIN_STD, (i + 1) / 3)} for i in range(3)]
+            ang_mid = max(JDUCK_ANG_STD, 0.25)
+            ang_st = [{"step": 0, "std": 0.566}, {"step": ts[0], "std": mix(0.566, ang_mid, 0.5)},
+                      {"step": ts[1], "std": ang_mid}, {"step": ts[2], "std": JDUCK_ANG_STD}]
+        else:
+            rng_st = [{"step": 0, **d}, {"step": t0, **tgt}]
+            lin_st = [{"step": 0, "std": 0.198}, {"step": t0, "std": (0.198 + JDUCK_LIN_STD) / 2}, {"step": t1, "std": JDUCK_LIN_STD}]
+            ang_st = [{"step": 0, "std": 0.566}, {"step": t0, "std": JDUCK_ANG_STD}]
         cfg.curriculum["jduck_cmd_ranges"] = _CT(
-            func=jduck_command_ranges_curriculum,
-            params={"command_name": "twist", "stages": [{"step": 0, **d}, {"step": t0, **tgt}]})
+            func=jduck_command_ranges_curriculum, params={"command_name": "twist", "stages": rng_st})
         cfg.rewards["track_linear_velocity"].params["std"] = 0.198
         cfg.curriculum["jduck_lin_std"] = _CT(
             func=microduck_mdp.velocity_tracking_std_curriculum,
-            params={"reward_name": "track_linear_velocity", "std_stages": [
-                {"step": 0, "std": 0.198}, {"step": t0, "std": (0.198 + JDUCK_LIN_STD) / 2}, {"step": t1, "std": JDUCK_LIN_STD}]})
-        _ang = cfg.rewards["track_angular_velocity"]
-        _ang.params["std"] = 0.566
+            params={"reward_name": "track_linear_velocity", "std_stages": lin_st})
+        cfg.rewards["track_angular_velocity"].params["std"] = 0.566
         cfg.curriculum["jduck_ang_std"] = _CT(
             func=microduck_mdp.velocity_tracking_std_curriculum,
-            params={"reward_name": "track_angular_velocity", "std_stages": [
-                {"step": 0, "std": 0.566}, {"step": t0, "std": JDUCK_ANG_STD}]})
+            params={"reward_name": "track_angular_velocity", "std_stages": ang_st})
     if JDUCK_LIN_REL_W > 0:
         cfg.rewards["track_lin_vel_rel"] = RewardTermCfg(
             func=track_lin_vel_rel_ema, weight=JDUCK_LIN_REL_W,
@@ -737,7 +749,7 @@ if os.environ.get("JDUCK_LIN_STD"):
 if os.environ.get("JDUCK_ANG_STD"):
     JduckRlCfg.experiment_name += f"_as{float(os.environ['JDUCK_ANG_STD']):g}"
 if JDUCK_CMD_CURR > 0:
-    JduckRlCfg.experiment_name += f"_cc{JDUCK_CMD_CURR}"
+    JduckRlCfg.experiment_name += f"_cc{JDUCK_CMD_CURR}" + ("st" if JDUCK_CMD_STAGED else "")
 if JDUCK_LIN_REL_W > 0:
     JduckRlCfg.experiment_name += f"_lrel{JDUCK_LIN_REL_W:g}"
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:

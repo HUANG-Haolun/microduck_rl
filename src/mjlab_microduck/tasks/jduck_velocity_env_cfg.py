@@ -87,6 +87,12 @@ JDUCK_STANCE_W = float(os.environ.get("JDUCK_STANCE_W", "0"))
 JDUCK_HEADING_W = float(os.environ.get("JDUCK_HEADING_W", "0"))
 JDUCK_HEADING_STD = float(os.environ.get("JDUCK_HEADING_STD", "0.2"))
 JDUCK_STANCE_STD = float(os.environ.get("JDUCK_STANCE_STD", "0.07"))
+# JDUCK_STANCE_ALL=1: the stance product covers all 10 leg joints instead of hip pitch + knee only. `a` after
+# `_sp<w>`. 2026-11-12: O15b stood with left hip roll −4~−10°, ankle +7°, right foot forward → fell on the robot.
+JDUCK_STANCE_ALL = os.environ.get("JDUCK_STANCE_ALL", "0") == "1"
+# JDUCK_SYMMETRY=<coef>: rsl_rl mirror loss (left↔right, symmetry.py; checked on jduck's MJCF: mirrored joint
+# angles give exactly mirrored feet). `_sym<coef>` in the name.
+JDUCK_SYMMETRY = float(os.environ.get("JDUCK_SYMMETRY", "0"))
 # JDUCK_POSE_STAND_STD=<rad>: zero-command pose-reward std for hip_pitch and knee (default 0.15, microduck's).
 # O8d/O11a/O12a stood with hip pitch ±8–13° and bent knees (gate 5°): at 0.15 an 8° offset still keeps
 # 42 % of the pose term; at 0.07 it keeps 2 %. Walking stds unchanged. Adds `_ps<std>` to the name.
@@ -767,7 +773,9 @@ def make_jduck_velocity_env_cfg(
         cfg.rewards["stance_product"] = RewardTermCfg(
             func=stance_product_when_standing, weight=JDUCK_STANCE_W,
             params={"std": JDUCK_STANCE_STD, "command_threshold": 0.01,
-                    "asset_cfg": SceneEntityCfg("robot", joint_names=(r".*hip_pitch.*", r".*knee.*"))})
+                    "asset_cfg": SceneEntityCfg("robot", joint_names=(r".*hip_yaw.*", r".*hip_roll.*", r".*hip_pitch.*",
+                                                                     r".*knee.*", r".*ankle.*") if JDUCK_STANCE_ALL
+                                                else (r".*hip_pitch.*", r".*knee.*"))})
     if JDUCK_POSE_STAND_STD > 0:
         sd = dict(cfg.rewards["pose"].params["std_standing"])
         for k in list(sd):
@@ -838,7 +846,8 @@ if JDUCK_LIN_REL_W > 0:
 if JDUCK_POSE_STAND_STD > 0:
     JduckRlCfg.experiment_name += f"_ps{JDUCK_POSE_STAND_STD:g}"
 if JDUCK_STANCE_W > 0:
-    JduckRlCfg.experiment_name += f"_sp{JDUCK_STANCE_W:g}" + (f"s{JDUCK_STANCE_STD:g}" if JDUCK_STANCE_STD != 0.07 else "")
+    JduckRlCfg.experiment_name += (f"_sp{JDUCK_STANCE_W:g}" + (f"s{JDUCK_STANCE_STD:g}" if JDUCK_STANCE_STD != 0.07 else "")
+                                   + ("a" if JDUCK_STANCE_ALL else ""))
 if JDUCK_HEADING_W > 0:
     JduckRlCfg.experiment_name += f"_hh{JDUCK_HEADING_W:g}" + (f"s{JDUCK_HEADING_STD:g}" if JDUCK_HEADING_STD != 0.2 else "")
 if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
@@ -868,6 +877,14 @@ if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
         JduckRlCfg.experiment_name += f"c{JDUCK_CAPS_CALM:g}"
     if JDUCK_CAPS_START > 0:
         JduckRlCfg.experiment_name += f"s{JDUCK_CAPS_START}"
+if JDUCK_SYMMETRY > 0:
+    from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _SymCfg, SYMMETRY_CFG as _SYM
+
+    _a = JduckRlCfg.algorithm
+    if not hasattr(_a, "symmetry_cfg"):
+        JduckRlCfg.algorithm = _a = _SymCfg(**vars(_a))
+    _a.symmetry_cfg = {**_SYM, "use_mirror_loss": True, "mirror_loss_coeff": JDUCK_SYMMETRY}
+    JduckRlCfg.experiment_name += f"_sym{JDUCK_SYMMETRY:g}"
 if JDUCK_CURR_DELAY > 0:
     JduckRlCfg.experiment_name += f"_cd{JDUCK_CURR_DELAY}"
 JduckRlCfg.run_name = JduckRlCfg.experiment_name

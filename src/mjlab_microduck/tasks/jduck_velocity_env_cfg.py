@@ -96,6 +96,8 @@ JDUCK_SYMMETRY = float(os.environ.get("JDUCK_SYMMETRY", "0"))
 # JDUCK_STANCE_L1=<w>: add −w · Σ|q − HOME| over the 10 leg joints at zero command (stance_l1_when_standing).
 # `_sl<w>` in the name.
 JDUCK_STANCE_L1 = float(os.environ.get("JDUCK_STANCE_L1", "0"))
+# JDUCK_STAND_TILT=<w>: add −w · (|pitch| + |roll|) of the trunk at zero command (stand_tilt_l1). `_tl<w>`.
+JDUCK_STAND_TILT = float(os.environ.get("JDUCK_STAND_TILT", "0"))
 # JDUCK_POSE_STAND_STD=<rad>: zero-command pose-reward std for hip_pitch and knee (default 0.15, microduck's).
 # O8d/O11a/O12a stood with hip pitch ±8–13° and bent knees (gate 5°): at 0.15 an 8° offset still keeps
 # 42 % of the pose term; at 0.07 it keeps 2 %. Walking stds unchanged. Adds `_ps<std>` to the name.
@@ -484,6 +486,22 @@ def stance_l1_when_standing(
     return standing * torch.sum(torch.abs(err), dim=-1)
 
 
+def stand_tilt_l1(env, command_name: str = "twist", command_threshold: float = 0.01,
+                  asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+    """|pitch| + |roll| of the trunk (rad, from projected gravity), only while the twist command is ~0.
+
+    2026-11-12: O18a stood leaning back 2.9° in the calibrated sim (O1: 0.2°) and 7.4° on the robot, where
+    it fell backwards easily. `upright` (std² 0.05) still pays 95 % at 3° and 74 % at 7°: no pull back.
+    """
+    import torch
+
+    cmd = env.command_manager.get_command(command_name)
+    standing = (torch.norm(cmd[:, :2], dim=1) + torch.abs(cmd[:, 2]) < command_threshold).float()
+    g = env.scene[asset_cfg.name].data.projected_gravity_b
+    tilt = torch.abs(torch.asin(torch.clamp(g[:, 0], -1, 1))) + torch.abs(torch.asin(torch.clamp(g[:, 1], -1, 1)))
+    return standing * tilt
+
+
 def quiet_actions_when_standing(
     env,
     s2: float,
@@ -801,6 +819,9 @@ def make_jduck_velocity_env_cfg(
                     "asset_cfg": SceneEntityCfg("robot", joint_names=(r".*hip_yaw.*", r".*hip_roll.*", r".*hip_pitch.*",
                                                                      r".*knee.*", r".*ankle.*") if JDUCK_STANCE_ALL
                                                 else (r".*hip_pitch.*", r".*knee.*"))})
+    if JDUCK_STAND_TILT > 0:
+        cfg.rewards["stand_tilt"] = RewardTermCfg(func=stand_tilt_l1, weight=-JDUCK_STAND_TILT,
+                                                  params={"command_threshold": 0.01})
     if JDUCK_STANCE_L1 > 0:
         cfg.rewards["stance_l1"] = RewardTermCfg(func=stance_l1_when_standing, weight=-JDUCK_STANCE_L1,
                                                  params={"command_threshold": 0.01})
@@ -905,6 +926,8 @@ if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
         JduckRlCfg.experiment_name += f"c{JDUCK_CAPS_CALM:g}"
     if JDUCK_CAPS_START > 0:
         JduckRlCfg.experiment_name += f"s{JDUCK_CAPS_START}"
+if JDUCK_STAND_TILT > 0:
+    JduckRlCfg.experiment_name += f"_tl{JDUCK_STAND_TILT:g}"
 if JDUCK_STANCE_L1 > 0:
     JduckRlCfg.experiment_name += f"_sl{JDUCK_STANCE_L1:g}"
 if JDUCK_SYMMETRY > 0:

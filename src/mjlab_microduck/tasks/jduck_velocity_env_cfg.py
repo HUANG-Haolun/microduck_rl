@@ -72,6 +72,9 @@ if os.environ.get("JDUCK_ANG_STD"):
 # JDUCK_LIN_REL_W=<weight>: add track_lin_vel_rel_ema (relative error on a 0.5 s EMA of v_xy,
 # rel_std 0.5, floor 0.04 m/s). Adds `_lrel<w>` to the name.
 JDUCK_LIN_REL_W = float(os.environ.get("JDUCK_LIN_REL_W", "0"))
+# JDUCK_YAW_REL_W=<weight>: add track_yaw_rel_ema (relative yaw-rate error, EMA 0.5 s, rel_std 0.25,
+# floor 0.1 rad/s). Adds `_yrel<w>` to the name.
+JDUCK_YAW_REL_W = float(os.environ.get("JDUCK_YAW_REL_W", "0"))
 # JDUCK_CMD_CURR=<iter>: train with the DEFAULT ranges/stds (0.25,0.15,0.8 / 0.198,0.566) until <iter>,
 # then switch to JDUCK_CMD / JDUCK_LIN_STD (lin std via a midway step at <iter>+1000). O5a/O5b
 # (narrow range + std 0.06 from step 0) never learned to step: air_time stayed 0.01 vs O1's 0.36
@@ -393,6 +396,39 @@ class track_yaw_rate_ema:
         self.ema += self.alpha * (wz - self.ema)
         cmd = env.command_manager.get_command(command_name)
         return torch.exp(-torch.square(cmd[:, 2] - self.ema) / std**2)
+
+
+class track_yaw_rel_ema:
+    """exp(−((cmd_wz − EMA(wz)) / max(|cmd_wz|, floor))² / rel_std²), only while |cmd_wz| > 0.01.
+
+    Relative yaw-rate tracking. 2026-11-12: three runs in a row (O21a/b/c) turned 25–60 % too far at the
+    board's 0.25 rad/s key; the absolute term (std 0.12) still pays 68 % at +30 % and 50 % at +40 %, and
+    most training samples are larger commands. Relative error makes 40 % overshoot cost the same at any wz:
+    rel_std 0.25 → +30 % keeps 24 %, +10 % keeps 85 %.
+    """
+
+    def __init__(self, cfg, env):
+        import torch
+
+        self.ema = torch.zeros(env.num_envs, device=env.device)
+        self.alpha = min(1.0, env.step_dt / cfg.params["tau"])
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            self.ema[:] = 0.0
+        else:
+            self.ema[env_ids] = 0.0
+
+    def __call__(self, env, rel_std: float, tau: float, floor: float = 0.1, command_name: str = "twist",
+                 asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+        import torch
+
+        del tau
+        wz = env.scene[asset_cfg.name].data.root_link_ang_vel_b[:, 2]
+        self.ema += self.alpha * (wz - self.ema)
+        c = env.command_manager.get_command(command_name)[:, 2]
+        rel = (c - self.ema) / torch.clamp(c.abs(), min=floor)
+        return torch.where(c.abs() > 0.01, torch.exp(-torch.square(rel) / rel_std**2), torch.zeros_like(c))
 
 
 class track_lin_vel_rel_ema:
@@ -835,6 +871,10 @@ def make_jduck_velocity_env_cfg(
         cfg.rewards["track_lin_vel_rel"] = RewardTermCfg(
             func=track_lin_vel_rel_ema, weight=JDUCK_LIN_REL_W,
             params={"rel_std": 0.5, "tau": 0.5, "floor": 0.04, "command_name": "twist"})
+    if JDUCK_YAW_REL_W > 0:
+        cfg.rewards["track_yaw_rel"] = RewardTermCfg(
+            func=track_yaw_rel_ema, weight=JDUCK_YAW_REL_W,
+            params={"rel_std": 0.25, "tau": 0.5, "floor": 0.1, "command_name": "twist"})
     if JDUCK_HEADING_W > 0:
         cfg.rewards["heading_hold"] = RewardTermCfg(
             func=heading_hold, weight=JDUCK_HEADING_W, params={"std": JDUCK_HEADING_STD, "command_name": "twist"})
@@ -892,6 +932,8 @@ if JDUCK_CMD_CURR > 0:
     JduckRlCfg.experiment_name += f"_cc{JDUCK_CMD_CURR}" + ("st" if JDUCK_CMD_STAGED else "")
 if JDUCK_LIN_REL_W > 0:
     JduckRlCfg.experiment_name += f"_lrel{JDUCK_LIN_REL_W:g}"
+if JDUCK_YAW_REL_W > 0:
+    JduckRlCfg.experiment_name += f"_yrel{JDUCK_YAW_REL_W:g}"
 if JDUCK_POSE_STAND_STD > 0:
     JduckRlCfg.experiment_name += f"_ps{JDUCK_POSE_STAND_STD:g}"
 if JDUCK_STANCE_W > 0:

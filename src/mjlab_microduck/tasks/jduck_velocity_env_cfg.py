@@ -93,6 +93,9 @@ JDUCK_STANCE_ALL = os.environ.get("JDUCK_STANCE_ALL", "0") == "1"
 # JDUCK_SYMMETRY=<coef>: rsl_rl mirror loss (left↔right, symmetry.py; checked on jduck's MJCF: mirrored joint
 # angles give exactly mirrored feet). `_sym<coef>` in the name.
 JDUCK_SYMMETRY = float(os.environ.get("JDUCK_SYMMETRY", "0"))
+# JDUCK_STANCE_L1=<w>: add −w · Σ|q − HOME| over the 10 leg joints at zero command (stance_l1_when_standing).
+# `_sl<w>` in the name.
+JDUCK_STANCE_L1 = float(os.environ.get("JDUCK_STANCE_L1", "0"))
 # JDUCK_POSE_STAND_STD=<rad>: zero-command pose-reward std for hip_pitch and knee (default 0.15, microduck's).
 # O8d/O11a/O12a stood with hip pitch ±8–13° and bent knees (gate 5°): at 0.15 an 8° offset still keeps
 # 42 % of the pose term; at 0.07 it keeps 2 %. Walking stds unchanged. Adds `_ps<std>` to the name.
@@ -459,6 +462,28 @@ class heading_hold:
         return torch.exp(-torch.square(self.err) / std**2)
 
 
+def stance_l1_when_standing(
+    env,
+    command_name: str = "twist",
+    command_threshold: float = 0.01,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", joint_names=(r".*hip_yaw.*", r".*hip_roll.*", r".*hip_pitch.*",
+                                                                     r".*knee.*", r".*ankle.*")),
+):
+    """Σ_j |q_j − q_home,j| (rad) over the leg joints, only while the twist command is ~0 (use a negative weight).
+
+    2026-11-12: the 10-joint Gaussian product (O17b, std 0.1) stood at 3.5° mean error per joint, where the
+    product is exp(−Σe²/std²) = 0.005 — flat, no gradient back to HOME (stance_product stayed 0.04 all run).
+    An L1 penalty has the same slope at every distance.
+    """
+    import torch
+
+    cmd = env.command_manager.get_command(command_name)
+    standing = (torch.norm(cmd[:, :2], dim=1) + torch.abs(cmd[:, 2]) < command_threshold).float()
+    asset = env.scene[asset_cfg.name]; ids = asset_cfg.joint_ids
+    err = asset.data.joint_pos[:, ids] - asset.data.default_joint_pos[:, ids]
+    return standing * torch.sum(torch.abs(err), dim=-1)
+
+
 def quiet_actions_when_standing(
     env,
     s2: float,
@@ -776,6 +801,9 @@ def make_jduck_velocity_env_cfg(
                     "asset_cfg": SceneEntityCfg("robot", joint_names=(r".*hip_yaw.*", r".*hip_roll.*", r".*hip_pitch.*",
                                                                      r".*knee.*", r".*ankle.*") if JDUCK_STANCE_ALL
                                                 else (r".*hip_pitch.*", r".*knee.*"))})
+    if JDUCK_STANCE_L1 > 0:
+        cfg.rewards["stance_l1"] = RewardTermCfg(func=stance_l1_when_standing, weight=-JDUCK_STANCE_L1,
+                                                 params={"command_threshold": 0.01})
     if JDUCK_POSE_STAND_STD > 0:
         sd = dict(cfg.rewards["pose"].params["std_standing"])
         for k in list(sd):
@@ -877,6 +905,8 @@ if JDUCK_CAPS_S > 0 or JDUCK_CAPS_T > 0:
         JduckRlCfg.experiment_name += f"c{JDUCK_CAPS_CALM:g}"
     if JDUCK_CAPS_START > 0:
         JduckRlCfg.experiment_name += f"s{JDUCK_CAPS_START}"
+if JDUCK_STANCE_L1 > 0:
+    JduckRlCfg.experiment_name += f"_sl{JDUCK_STANCE_L1:g}"
 if JDUCK_SYMMETRY > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _SymCfg, SYMMETRY_CFG as _SYM
 

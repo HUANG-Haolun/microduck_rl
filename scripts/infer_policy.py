@@ -10,6 +10,7 @@ import pickle
 import queue
 import select
 import sys
+from pathlib import Path
 import termios
 import threading
 import time
@@ -1340,6 +1341,12 @@ def main():
                              "'' = use the XML PD actuators (for the v0 PD policy).")
     parser.add_argument("--jduck-torque", type=float, default=0.96, help="(jduck) stall torque N·m (JDUCK_TORQUE)")
     parser.add_argument("--jduck-noload", type=float, default=4.8, help="(jduck) no-load speed rad/s (JDUCK_NOLOAD)")
+    parser.add_argument("--jduck-keys", default=None, metavar="VX,VY,WZ",
+                        help="(jduck) key speed limits, e.g. 0.08,0.05,0.25 = the robot's run_robot.sh defaults")
+    parser.add_argument("--stand-hold", action="store_true",
+                        help="(jduck) like jduck_run --stand-hold: at zero command fade the action to 0 (hold HOME)")
+    parser.add_argument("--wz-scale", type=float, default=1.0,
+                        help="(jduck) like jduck_run --wz-scale: yaw sent to the policy = key × this")
     args = parser.parse_args()
 
     jduck_fw = None
@@ -1511,7 +1518,7 @@ def main():
         policy.vel_min_y = 0.0
         policy.vel_max_ang = 1.0      # ±1.0 rad heading error
     elif args.robot == "jduck":
-        vx, vy, wz = JDUCK_VEL_LIMITS
+        vx, vy, wz = ([float(x) for x in args.jduck_keys.split(",")] if args.jduck_keys else JDUCK_VEL_LIMITS)
         policy.vel_max_x, policy.vel_min_x = vx, -vx
         policy.vel_max_y, policy.vel_min_y = vy, -vy
         policy.vel_max_ang = wz
@@ -1565,6 +1572,15 @@ def main():
             policy.enable_hw_obs(np.random.default_rng(1).random(len(policy.joint_qvel_indices)), qd_ema)
             print(f"jduck joint obs: robot-style (ADC-quantized q from last tick, qd = Δq/20 ms, EMA {qd_ema:g}); "
                   f"--true-obs for the old ideal obs")
+
+    stand_hold = None
+    if args.stand_hold:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "jduck_tools"))
+        from jduck_run import StandHold
+        stand_hold = StandHold()
+        print("stand-hold: zero command → action fades to 0 (HOME) after 0.4 s, like jduck_run --stand-hold")
+    if args.wz_scale != 1.0:
+        print(f"wz-scale: yaw sent to the policy = key × {args.wz_scale:g}")
 
     # Verify observation size
     test_obs = policy.get_observations()
@@ -1860,7 +1876,15 @@ def main():
                 policy.update_behavior(actual_dt)
 
                 if policy_enabled:
+                    key_cmd = policy.command.copy()
+                    if args.wz_scale != 1.0 and len(policy.command) >= 3:
+                        policy.command[2] = key_cmd[2] * args.wz_scale
                     action = policy.infer()
+                    policy.command[:] = key_cmd
+                    if stand_hold is not None:
+                        # = jduck_run: action (and last_action in the next obs) is the faded one
+                        action = action * stand_hold.scale(key_cmd[:3], control_step_count * 0.02)
+                        policy.last_action = action.copy()
                     policy.apply_action(action)
                     if jduck_delay is not None:
                         jduck_target = data.ctrl[:len(jduck_target)].copy()

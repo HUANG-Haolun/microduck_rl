@@ -16,6 +16,32 @@ SERVOS = [
 ]
 
 
+def test_oldankle3_home_changes_only_ankles_and_spawn_height():
+    """The new HOME must stay symmetric and preserve the N3 leg geometry."""
+    import math
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "from mjlab_microduck.robot.jduck_constants import JDUCK_HOME_FRAME as h\n"
+        "print(h.pos[2], h.joint_pos['left_ankle'], h.joint_pos['right_ankle'], "
+        "h.joint_pos['left_hip_pitch'], h.joint_pos['right_hip_pitch'])\n"
+    )
+    values = {}
+    for home in ("old", "oldankle3"):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("JDUCK_")}
+        env["JDUCK_HOME"] = home
+        out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+        values[home] = [float(x) for x in out.stdout.strip().splitlines()[-1].split()]
+    old, new = values["old"], values["oldankle3"]
+    assert old[1:] == pytest.approx([0.05, -0.05, 0.25, -0.25])
+    assert new[0] - old[0] == pytest.approx(0.001)
+    assert new[1] - old[1] == pytest.approx(3 * math.pi / 180)
+    assert new[2] - old[2] == pytest.approx(-3 * math.pi / 180)
+    assert new[3:] == old[3:]
+
+
 def _model():
     return get_jduck_walk_spec().compile()
 

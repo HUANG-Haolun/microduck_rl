@@ -13,6 +13,7 @@ assumption. `JDUCK_ACTUATOR=pd` selects the old placeholder PD (kp=8, kd=0.2)
 that jduck_walk_v0.onnx was trained with.
 """
 
+import math
 import os
 from pathlib import Path
 
@@ -55,10 +56,10 @@ JDUCK_ACTUATOR = os.environ.get("JDUCK_ACTUATOR", "ubt12hc")
 assert JDUCK_ACTUATOR in ("ubt12hc", "pd"), JDUCK_ACTUATOR
 
 # HOME. Measured in sim from the MJCF: trunk_base origin height with the soles on
-# the floor. JDUCK_HOME=new|old overrides the default (new for ubt12hc, old for pd)
-# so actuator and pose can be A/B'd separately.
+# the floor. JDUCK_HOME=new|old|oldankle3 overrides the default so actuator
+# and pose can be A/B'd separately.
 JDUCK_HOME = os.environ.get("JDUCK_HOME", "new" if JDUCK_ACTUATOR == "ubt12hc" else "old")
-assert JDUCK_HOME in ("new", "old"), JDUCK_HOME
+assert JDUCK_HOME in ("new", "old", "oldankle3"), JDUCK_HOME
 if JDUCK_HOME == "new":
     # Knees bent the "other" way (hip_pitch −/+, knee +/−). Inside the friend's
     # measured ranges (jduck_tools/calibration.yaml), this pose needs only
@@ -74,11 +75,15 @@ if JDUCK_HOME == "new":
 else:
     # v0 HOME (what jduck_walk_v0.onnx was trained with). It sits 13–15° from
     # the hip_pitch limit.
-    JDUCK_HOME_TRUNK_Z = 0.134
+    # The ankle3 variant is the N3 stand target measured in the calibrated
+    # servo simulation. It changes the policy's HOME reference, so train it as
+    # a new policy instead of using it with an existing old-HOME checkpoint.
+    JDUCK_HOME_TRUNK_Z = 0.135 if JDUCK_HOME == "oldankle3" else 0.134
+    ankle = 0.05 + (3.0 * math.pi / 180.0 if JDUCK_HOME == "oldankle3" else 0.0)
     _LEGS = {
         r"left_hip_pitch": 0.25, r"right_hip_pitch": -0.25,
         r"left_knee": -0.30, r"right_knee": 0.30,
-        r"left_ankle": 0.05, r"right_ankle": -0.05,
+        r"left_ankle": ankle, r"right_ankle": -ankle,
     }
 
 JDUCK_HOME_FRAME = EntityCfg.InitialStateCfg(

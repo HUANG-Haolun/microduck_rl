@@ -49,7 +49,7 @@ case "$exp" in
     jduck_ball_kick_left_ubt12hc*)  envs=(JDUCK_ACTUATOR=ubt12hc JDUCK_KICK_FOOT=left) ;;
     *) echo "不认识的实验名：$exp（不是 jduck 训练？）" >&2; exit 1 ;;
 esac
-[[ "$exp" =~ _home(new|old) ]] && envs+=("JDUCK_HOME=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _home(new|oldankle3|old) ]] && envs+=("JDUCK_HOME=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _lat([0-9.]+) ]] && envs+=("JDUCK_KICK_LAT_W=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _over([0-9.]+) ]] && envs+=("JDUCK_KICK_OVER_W=${BASH_REMATCH[1]}")
 if [[ "$exp" =~ _k([0-9.]+)ff([0-9.]+)db([0-9.]+)fl([0-9.]+) ]]; then

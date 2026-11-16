@@ -1345,9 +1345,15 @@ def main():
                         help="(jduck) key speed limits, e.g. 0.08,0.05,0.25 = the robot's run_robot.sh defaults")
     parser.add_argument("--stand-hold", action="store_true",
                         help="(jduck) like jduck_run --stand-hold: at zero command fade the action to 0 (hold HOME)")
+    parser.add_argument("--stand-ankle-deg", type=float, default=0.0,
+                        help="(jduck) with --stand-hold: standing target left ankle +deg, right ankle -deg from HOME")
     parser.add_argument("--wz-scale", type=float, default=1.0,
                         help="(jduck) like jduck_run --wz-scale: yaw sent to the policy = key × this")
     args = parser.parse_args()
+    if not math.isfinite(args.stand_ankle_deg) or abs(args.stand_ankle_deg) > 10:
+        parser.error("--stand-ankle-deg must be within -10 and 10 degrees")
+    if args.stand_ankle_deg and (args.robot != "jduck" or not args.stand_hold):
+        parser.error("--stand-ankle-deg requires --robot jduck --stand-hold")
 
     jduck_fw = None
     if args.robot == "jduck":
@@ -1574,11 +1580,17 @@ def main():
                   f"--true-obs for the old ideal obs")
 
     stand_hold = None
+    stand_home_offset = None
     if args.stand_hold:
         sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "jduck_tools"))
-        from jduck_run import StandHold
+        from jduck_run import JOINTS, StandHold
         stand_hold = StandHold()
+        stand_home_offset = np.zeros(policy.n_joints, dtype=np.float32)
+        stand_home_offset[JOINTS.index("left_ankle")] = math.radians(args.stand_ankle_deg)
+        stand_home_offset[JOINTS.index("right_ankle")] = -math.radians(args.stand_ankle_deg)
         print("stand-hold: zero command → action fades to 0 (HOME) after 0.4 s, like jduck_run --stand-hold")
+        if args.stand_ankle_deg:
+            print(f"standing ankles: left +{args.stand_ankle_deg:g}°, right {-args.stand_ankle_deg:g}° from HOME")
     if args.wz_scale != 1.0:
         print(f"wz-scale: yaw sent to the policy = key × {args.wz_scale:g}")
 
@@ -1883,7 +1895,8 @@ def main():
                     policy.command[:] = key_cmd
                     if stand_hold is not None:
                         # = jduck_run: action (and last_action in the next obs) is the faded one
-                        action = action * stand_hold.scale(key_cmd[:3], control_step_count * 0.02)
+                        stand_scale = stand_hold.scale(key_cmd[:3], control_step_count * 0.02)
+                        action = action * stand_scale + (1.0 - stand_scale) * stand_home_offset / policy.action_scale
                         policy.last_action = action.copy()
                     policy.apply_action(action)
                     if jduck_delay is not None:

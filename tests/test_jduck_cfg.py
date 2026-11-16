@@ -110,6 +110,28 @@ def test_jduck_staged_action_rate_and_yaw_ema():
     assert name.endswith("_sar10from1500_angema0.5")
 
 
+def test_jduck_stance_l1_delayed_weight():
+    """A mild HOME penalty starts after the walking policy has learned to balance."""
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import mjlab_microduck.tasks.jduck_velocity_env_cfg as m\n"
+        "c = m.make_jduck_velocity_env_cfg()\n"
+        "print(c.rewards['stance_l1'].weight)\n"
+        "print(c.curriculum['stance_l1_weight'].params['weight_stages'])\n"
+        "print(m.JduckRlCfg.experiment_name)\n"
+    )
+    env = {k: v for k, v in os.environ.items() if not k.startswith("JDUCK_")}
+    env.update(JDUCK_STANCE_L1="0.2", JDUCK_STANCE_L1_START="1000")
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True)
+    initial, stages, name = out.stdout.strip().splitlines()[-3:]
+    assert float(initial) == 0.0
+    assert stages == "[{'step': 0, 'weight': 0.0}, {'step': 24000, 'weight': -0.05}, {'step': 36000, 'weight': -0.1}, {'step': 48000, 'weight': -0.2}]"
+    assert name.endswith("_sl0.2s1000")
+
+
 def test_groundcontact_model_matches_walk_model():
     """robot_groundcontact.xml = robot_walk.xml + floor-colliding body meshes; same joints and mass."""
     from mjlab_microduck.robot.jduck_constants import get_jduck_groundcontact_spec

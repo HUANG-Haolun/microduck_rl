@@ -99,6 +99,8 @@ JDUCK_SYMMETRY = float(os.environ.get("JDUCK_SYMMETRY", "0"))
 # JDUCK_STANCE_L1=<w>: add −w · Σ|q − HOME| over the 10 leg joints at zero command (stance_l1_when_standing).
 # `_sl<w>` in the name.
 JDUCK_STANCE_L1 = float(os.environ.get("JDUCK_STANCE_L1", "0"))
+# Optional delayed ramp in training iterations. Keep the legacy immediate weight when unset.
+JDUCK_STANCE_L1_START = int(os.environ.get("JDUCK_STANCE_L1_START", "0"))
 # JDUCK_STAND_TILT=<w>: add −w · (|pitch| + |roll|) of the trunk at zero command (stand_tilt_l1). `_tl<w>`.
 JDUCK_STAND_TILT = float(os.environ.get("JDUCK_STAND_TILT", "0"))
 # JDUCK_POSE_STAND_STD=<rad>: zero-command pose-reward std for hip_pitch and knee (default 0.15, microduck's).
@@ -859,8 +861,19 @@ def make_jduck_velocity_env_cfg(
         cfg.rewards["stand_tilt"] = RewardTermCfg(func=stand_tilt_l1, weight=-JDUCK_STAND_TILT,
                                                   params={"command_threshold": 0.01})
     if JDUCK_STANCE_L1 > 0:
-        cfg.rewards["stance_l1"] = RewardTermCfg(func=stance_l1_when_standing, weight=-JDUCK_STANCE_L1,
+        cfg.rewards["stance_l1"] = RewardTermCfg(func=stance_l1_when_standing,
+                                                 weight=0.0 if JDUCK_STANCE_L1_START > 0 else -JDUCK_STANCE_L1,
                                                  params={"command_threshold": 0.01})
+        if JDUCK_STANCE_L1_START > 0:
+            cfg.curriculum["stance_l1_weight"] = CurriculumTermCfg(
+                func=microduck_mdp.reward_weight,
+                params={"reward_name": "stance_l1", "weight_stages": [
+                    {"step": 0, "weight": 0.0},
+                    {"step": JDUCK_STANCE_L1_START * 24, "weight": -JDUCK_STANCE_L1 * 0.25},
+                    {"step": (JDUCK_STANCE_L1_START + 500) * 24, "weight": -JDUCK_STANCE_L1 * 0.5},
+                    {"step": (JDUCK_STANCE_L1_START + 1000) * 24, "weight": -JDUCK_STANCE_L1},
+                ]},
+            )
     if JDUCK_POSE_STAND_STD > 0:
         sd = dict(cfg.rewards["pose"].params["std_standing"])
         for k in list(sd):
@@ -972,6 +985,8 @@ if JDUCK_STAND_TILT > 0:
     JduckRlCfg.experiment_name += f"_tl{JDUCK_STAND_TILT:g}"
 if JDUCK_STANCE_L1 > 0:
     JduckRlCfg.experiment_name += f"_sl{JDUCK_STANCE_L1:g}"
+    if JDUCK_STANCE_L1_START > 0:
+        JduckRlCfg.experiment_name += f"s{JDUCK_STANCE_L1_START}"
 if JDUCK_SYMMETRY > 0:
     from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg as _SymCfg, SYMMETRY_CFG as _SYM
 

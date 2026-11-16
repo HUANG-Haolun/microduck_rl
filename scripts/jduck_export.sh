@@ -70,6 +70,7 @@ fi
 [[ "$exp" =~ _sp[0-9.]+(s[0-9.]+)?a(_|$) ]] && envs+=("JDUCK_STANCE_ALL=1")
 [[ "$exp" =~ _sym([0-9.]+) ]] && envs+=("JDUCK_SYMMETRY=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _sl([0-9.]+) ]] && envs+=("JDUCK_STANCE_L1=${BASH_REMATCH[1]}")
+[[ "$exp" =~ _sl[0-9.]+s([0-9]+) ]] && envs+=("JDUCK_STANCE_L1_START=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _tl([0-9.]+) ]] && envs+=("JDUCK_STAND_TILT=${BASH_REMATCH[1]}")
 [[ "$exp" =~ _hh([0-9.]+)(s([0-9.]+))? ]] && { envs+=("JDUCK_HEADING_W=${BASH_REMATCH[1]}"); [ -n "${BASH_REMATCH[3]}" ] && envs+=("JDUCK_HEADING_STD=${BASH_REMATCH[3]}"); }
 [[ "$exp" =~ _dl([0-9]+)-([0-9]+) ]] && envs+=("JDUCK_ACT_DELAY=${BASH_REMATCH[1]},${BASH_REMATCH[2]}")

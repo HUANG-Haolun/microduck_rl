@@ -4758,25 +4758,43 @@ class VelocityCommandCommandOnly(UniformVelocityCommand):
         # spinning on the spot was effectively untrained → slow/unstable real-robot
         # turning. Mirrors the base rel_forward_envs mechanism.
         p = getattr(self.cfg, "rel_turn_in_place_envs", 0.0)
-        if p <= 0.0:
-            return
         r = torch.empty(len(env_ids), device=self.device)
-        turn_ids = env_ids[r.uniform_(0.0, 1.0) < p]
-        if len(turn_ids) == 0:
-            return
-        self.vel_command_b[turn_ids, 0] = 0.0
-        self.vel_command_b[turn_ids, 1] = 0.0
-        lo, hi = self.cfg.ranges.ang_vel_z
-        maxr = max(abs(lo), abs(hi))
-        rr = torch.empty(len(turn_ids), device=self.device)
-        sign = torch.where(rr.uniform_(0.0, 1.0) < 0.5, -1.0, 1.0)
-        lo_frac = getattr(self.cfg, "turn_in_place_min_frac", 0.4)
-        mag = torch.empty(len(turn_ids), device=self.device).uniform_(lo_frac * maxr, maxr)
-        self.vel_command_b[turn_ids, 2] = sign * mag
-        # These envs must actually turn — un-mark them as standing (which would
-        # zero the command) and refresh the world-frame reference copy.
-        self.is_standing_env[turn_ids] = False
-        self.vel_command_w[turn_ids] = self.vel_command_b[turn_ids]
+        turn_mask = r.uniform_(0.0, 1.0) < p
+        turn_ids = env_ids[turn_mask]
+        if len(turn_ids) > 0:
+            self.vel_command_b[turn_ids, :2] = 0.0
+            lo, hi = self.cfg.ranges.ang_vel_z
+            maxr = max(abs(lo), abs(hi))
+            rr = torch.empty(len(turn_ids), device=self.device)
+            sign = torch.where(rr.uniform_(0.0, 1.0) < 0.5, -1.0, 1.0)
+            lo_frac = getattr(self.cfg, "turn_in_place_min_frac", 0.4)
+            mag = torch.empty(len(turn_ids), device=self.device).uniform_(lo_frac * maxr, maxr)
+            self.vel_command_b[turn_ids, 2] = sign * mag
+
+        # Keyboard-like straight commands are otherwise almost absent: all
+        # three axes are sampled independently, so wz is rarely exactly zero.
+        # Keep this bucket disjoint from turns and preserve the standing share.
+        axis_p = getattr(self.cfg, "rel_axis_envs", 0.0)
+        axis_ids = env_ids[(r.uniform_(0.0, 1.0) < axis_p) & ~turn_mask
+                           & ~self.is_standing_env[env_ids]]
+        if len(axis_ids) > 0:
+            self.vel_command_b[axis_ids, :] = 0.0
+            x_mask = r[:len(axis_ids)].uniform_(0.0, 1.0) < 0.5
+            x_ids, y_ids = axis_ids[x_mask], axis_ids[~x_mask]
+            for ids, dim, low, high in ((x_ids, 0, 0.06, 0.2), (y_ids, 1, 0.04, 0.08)):
+                if len(ids) == 0:
+                    continue
+                limits = self.cfg.ranges.lin_vel_x if dim == 0 else self.cfg.ranges.lin_vel_y
+                top = min(high, max(abs(v) for v in limits))
+                mag = torch.empty(len(ids), device=self.device).uniform_(min(low, top), top)
+                sign = torch.where(r[:len(ids)].uniform_(0.0, 1.0) < 0.5, -1.0, 1.0)
+                self.vel_command_b[ids, dim] = sign * mag
+
+        active_ids = torch.cat((turn_ids, axis_ids))
+        if len(active_ids) > 0:
+            # These samples must not be zeroed by the standing mask.
+            self.is_standing_env[active_ids] = False
+            self.vel_command_w[active_ids] = self.vel_command_b[active_ids]
 
     def _debug_vis_impl(self, visualizer: "DebugVisualizer") -> None:
         batch = visualizer.env_idx
@@ -4818,6 +4836,8 @@ class VelocityCommandCommandOnlyCfg(UniformVelocityCommandCfg):
     # 0.4 (historical) means in-place yaw below 0.4 rad/s is never trained (standing
     # envs zero the whole command; uniform sampling never gives lin == 0).
     turn_in_place_min_frac: float = 0.4
+    rel_axis_envs: float = 0.0
+    """Fraction of nonstanding, nonturn resamples using one linear axis and zero yaw."""
 
     def build(self, env: ManagerBasedRlEnv) -> "VelocityCommandCommandOnly":
         return VelocityCommandCommandOnly(self, env)

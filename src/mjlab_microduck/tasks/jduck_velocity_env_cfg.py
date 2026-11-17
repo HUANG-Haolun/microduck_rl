@@ -75,6 +75,10 @@ JDUCK_LIN_REL_W = float(os.environ.get("JDUCK_LIN_REL_W", "0"))
 # JDUCK_YAW_REL_W=<weight>: add track_yaw_rel_ema (relative yaw-rate error, EMA 0.5 s, rel_std 0.25,
 # floor 0.1 rad/s). Adds `_yrel<w>` to the name.
 JDUCK_YAW_REL_W = float(os.environ.get("JDUCK_YAW_REL_W", "0"))
+# Fraction of resamples with one linear axis and zero yaw, matching keyboard
+# straight/sideways commands. The sampler keeps this disjoint from pure turns.
+JDUCK_AXIS_FRACTION = float(os.environ.get("JDUCK_AXIS_FRACTION", "0"))
+assert 0.0 <= JDUCK_AXIS_FRACTION <= 1.0, JDUCK_AXIS_FRACTION
 # JDUCK_CMD_CURR=<iter>: train with the DEFAULT ranges/stds (0.25,0.15,0.8 / 0.198,0.566) until <iter>,
 # then switch to JDUCK_CMD / JDUCK_LIN_STD (lin std via a midway step at <iter>+1000). O5a/O5b
 # (narrow range + std 0.06 from step 0) never learned to step: air_time stayed 0.01 vs O1's 0.36
@@ -716,6 +720,7 @@ def make_jduck_velocity_env_cfg(
     twist.ranges.lin_vel_x = JDUCK_LIN_VEL_X
     twist.ranges.lin_vel_y = JDUCK_LIN_VEL_Y
     twist.ranges.ang_vel_z = JDUCK_ANG_VEL_Z
+    twist.rel_axis_envs = JDUCK_AXIS_FRACTION
     cfg.commands["twist"] = twist
 
     # Tracking std must scale with the command range. With microduck's
@@ -947,6 +952,8 @@ if JDUCK_LIN_REL_W > 0:
     JduckRlCfg.experiment_name += f"_lrel{JDUCK_LIN_REL_W:g}"
 if JDUCK_YAW_REL_W > 0:
     JduckRlCfg.experiment_name += f"_yrel{JDUCK_YAW_REL_W:g}"
+if JDUCK_AXIS_FRACTION > 0:
+    JduckRlCfg.experiment_name += f"_axis{JDUCK_AXIS_FRACTION:g}"
 if JDUCK_POSE_STAND_STD > 0:
     JduckRlCfg.experiment_name += f"_ps{JDUCK_POSE_STAND_STD:g}"
 if JDUCK_STANCE_W > 0:
